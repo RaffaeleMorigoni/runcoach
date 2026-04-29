@@ -22,12 +22,13 @@ function ProgressV2({ tweaks }) {
   const last         = loadHistory[loadHistory.length - 1] || { ctl: 0, atl: 0, tsb: 0 };
   const overTr       = useMemoP2(() => detectOvertraining(loadHistory, trainingData.slice(-10)), [loadHistory, trainingData]);
 
-  // PB → predizione gara
+  // PB calcolati dalle attività (best effort) → fallback ai PB hardcoded
+  const computedPBs = useMemoP2(() => computePBsFromActivities(activities, PB), [activities]);
   const pbs = useMemoP2(() => ({
-    '5k':  { distanceMeters: 5000,  timeSec: PB['5k'].seconds,  daysAgo: 30 },
-    '10k': { distanceMeters: 10000, timeSec: PB['10k'].seconds, daysAgo: 30 },
-    '21k': { distanceMeters: 21097, timeSec: PB['21k'].seconds, daysAgo: 90 },
-  }), []);
+    '5k':  { distanceMeters: 5000,  timeSec: computedPBs?.['5k']?.seconds  || PB['5k'].seconds,  daysAgo: 30 },
+    '10k': { distanceMeters: 10000, timeSec: computedPBs?.['10k']?.seconds || PB['10k'].seconds, daysAgo: 30 },
+    '21k': { distanceMeters: 21097, timeSec: computedPBs?.['21k']?.seconds || PB['21k'].seconds, daysAgo: 90 },
+  }), [computedPBs]);
   const prediction = useMemoP2(() => predictRaceTime(pbs, last.tsb, 21.097), [pbs, last.tsb]);
 
   // Statistiche aggregate

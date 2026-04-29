@@ -28,6 +28,12 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
   const overTr       = useMemoH2(() => detectOvertraining(loadHistory, trainingData.slice(-7)), [loadHistory, trainingData]);
   const form         = getFormLabel(last.tsb);
 
+  // PB calcolati dalle attività Strava (fallback ai PB hardcoded)
+  const pbs = useMemoH2(() => computePBsFromActivities(activities, PB), [activities]);
+
+  // Volume settimanale medio dalle attività (fallback al tweak/USER)
+  const avgWeekly = useMemoH2(() => computeWeeklyAverage(trainingData, 4), [trainingData]);
+
   // Workout di oggi (relativo alla gara)
   const todayWorkout = useMemoH2(() => generateTodayWorkout(loadHistory, USER.raceDate), [loadHistory]);
 
@@ -38,23 +44,28 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
     return Math.max(0, Math.ceil((race - now) / 86400000));
   }, []);
 
-  // Settimana km progress
+  // Settimana km progress (target = media reale ultime 4 sett, fallback a tweak)
   const weekStats = useMemoH2(() => {
     const now = new Date();
     const monday = new Date(now);
     monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
     monday.setHours(0,0,0,0);
     const weekActs = trainingData.filter(a => new Date(a.date) >= monday);
+    const target = avgWeekly.avgKm > 0 ? Math.round(avgWeekly.avgKm) : (tweaks.weeklyKm || 25);
     return {
-      kmDone: weekActs.reduce((s, a) => s + a.distance_km, 0),
-      kmTarget: tweaks.weeklyKm || 28,
+      kmDone: weekActs.reduce((s, a) => s + (a.distance_km || 0), 0),
+      kmTarget: target,
       runs: weekActs.length,
+      isAvg: avgWeekly.avgKm > 0,
     };
-  }, [trainingData, tweaks.weeklyKm]);
+  }, [trainingData, avgWeekly, tweaks.weeklyKm]);
 
-  const userName = tweaks.userName || athlete?.firstname || USER.name;
+  // Nome: Strava firstname > tweak > USER fallback
+  const userName = athlete?.firstname || tweaks.userName || USER.name;
   const today = new Date();
   const dayLabel = today.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  const noData = !loading && activities.length === 0;
 
   if (loading) {
     return (
@@ -138,9 +149,24 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
         </div>
       </div>
 
-      {/* Tre anelli forma */}
-      <div style={{ padding: '0 14px 14px' }}>
-        <SectionHeader kicker="STATO ATTUALE" title="La tua forma" color={form.color}/>
+      {/* Tre anelli forma — solo se ci sono dati */}
+      {noData ? (
+        <div style={{ padding: '0 14px 14px' }}>
+          <GlowCard glow={NEON.yellow} intensity={0.1}>
+            <div style={{ display:'flex', alignItems:'center', gap: 12 }}>
+              <div style={{ fontSize: 28 }}>📊</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: NEON.text, fontSize: 13, fontWeight: 700 }}>Nessuna corsa trovata</div>
+                <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 3, lineHeight: 1.4 }}>
+                  CTL/ATL/TSB e PB si calcolano dalle tue attività. Carica almeno una corsa su Strava per vedere i grafici.
+                </div>
+              </div>
+            </div>
+          </GlowCard>
+        </div>
+      ) : (
+        <div style={{ padding: '0 14px 14px' }}>
+          <SectionHeader kicker="STATO ATTUALE" title="La tua forma" color={form.color}/>
         <GlowCard glow={form.color} intensity={0.15}>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 8, alignItems:'center' }}>
             {/* Fitness ring */}
@@ -203,6 +229,7 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
           </div>
         </GlowCard>
       </div>
+      )}
 
       {/* Avviso overtraining */}
       {overTr.flags?.length > 0 && (
@@ -268,12 +295,12 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
 
       {/* PB Big numbers */}
       <div style={{ padding: '0 14px 14px' }}>
-        <SectionHeader kicker="PERSONAL BEST" title="I tuoi record" color={NEON.purple}/>
+        <SectionHeader kicker="PERSONAL BEST" title={pbs?.['5k']?.fromStrava ? 'Da Strava' : 'I tuoi record'} color={NEON.purple}/>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 8 }}>
           {[
-            { k: '5k',  label: '5K',  color: NEON.teal,   pb: PB['5k'] },
-            { k: '10k', label: '10K', color: NEON.blue,   pb: PB['10k'] },
-            { k: '21k', label: '21K', color: NEON.purple, pb: PB['21k'] },
+            { k: '5k',  label: '5K',  color: NEON.teal,   pb: pbs?.['5k'] },
+            { k: '10k', label: '10K', color: NEON.blue,   pb: pbs?.['10k'] },
+            { k: '21k', label: '21K', color: NEON.purple, pb: pbs?.['21k'] },
           ].map(({ k, label, color, pb }) => (
             <div key={k} style={{
               background: NEON.bg2,
@@ -283,8 +310,8 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
               boxShadow: `0 0 14px ${color}11`,
             }}>
               <div style={{ color: color, fontSize: 9, fontWeight: 700, letterSpacing: '0.12em' }}>{label}</div>
-              <div style={{ color: NEON.text, fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', marginTop: 4, textShadow: `0 0 8px ${color}44` }}>{pb.time}</div>
-              <div style={{ color: NEON.textDim, fontSize: 10, marginTop: 2 }}>{pb.pace}</div>
+              <div style={{ color: NEON.text, fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', marginTop: 4, textShadow: `0 0 8px ${color}44` }}>{pb?.time || '—'}</div>
+              <div style={{ color: NEON.textDim, fontSize: 10, marginTop: 2 }}>{pb?.pace || ''}</div>
             </div>
           ))}
         </div>
@@ -296,7 +323,9 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 10 }}>
             <div>
               <div style={{ color: NEON.textFaint, fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' }}>QUESTA SETTIMANA</div>
-              <div style={{ color: NEON.text, fontSize: 14, fontWeight: 700, marginTop: 2 }}>Volume settimanale</div>
+              <div style={{ color: NEON.text, fontSize: 14, fontWeight: 700, marginTop: 2 }}>
+                Volume {weekStats.isAvg ? `· media ult. 4 sett` : ''}
+              </div>
             </div>
             <div style={{ textAlign:'right' }}>
               <div style={{ color: NEON.teal, fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>
@@ -306,11 +335,11 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
               <div style={{ color: NEON.textDim, fontSize: 10 }}>{weekStats.runs} uscite</div>
             </div>
           </div>
-          {/* Bar */}
+          {/* Bar — guard contro divisione per 0 */}
           <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow:'hidden' }}>
             <div style={{
               height: '100%',
-              width: `${Math.min(100, (weekStats.kmDone / weekStats.kmTarget) * 100)}%`,
+              width: weekStats.kmTarget > 0 ? `${Math.min(100, (weekStats.kmDone / weekStats.kmTarget) * 100)}%` : '0%',
               background: `linear-gradient(90deg, ${NEON.teal}, ${NEON.blue})`,
               borderRadius: 3,
               boxShadow: `0 0 8px ${NEON.teal}66`,

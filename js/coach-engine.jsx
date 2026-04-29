@@ -167,8 +167,8 @@ function detectOvertraining(loadHistory, recentActivities) {
     });
   }
 
-  // Flag 2: ATL/CTL > 1.5 (rampa troppo veloce)
-  if (last.ctl > 0 && last.atl / last.ctl > 1.5) {
+  // Flag 2: ATL/CTL > 1.5 (rampa troppo veloce) — guard contro CTL=0
+  if (last.ctl > 5 && last.atl / last.ctl > 1.5) {
     flags.push({
       severity: 'medium',
       title: 'Rampa di carico ripida',
@@ -265,12 +265,12 @@ function predictRaceTime(pbs, tsb, targetDistKm = 21.097) {
 
 // ─── Forma fisica readable label ──────────────────────────────────────────────
 function getFormLabel(tsb) {
-  if (tsb === null || tsb === undefined) return { label: 'Sconosciuta', color: '#888', desc: 'Dati insufficienti' };
-  if (tsb >= 25)  return { label: 'Troppo riposata', color: '#A78BFA', desc: 'Rischio detraining se prolungato' };
-  if (tsb >= 5)   return { label: 'Forma ottimale',  color: '#00CFA8', desc: 'Pronta per performance' };
-  if (tsb >= -10) return { label: 'Costruzione',     color: '#4D9EFF', desc: 'Carico produttivo, recupero ok' };
-  if (tsb >= -20) return { label: 'Affaticata',      color: '#F6C94E', desc: 'Carico elevato, attenzione recupero' };
-  return            { label: 'Sovraccarico',         color: '#FF4422', desc: 'Riduci carico immediatamente' };
+  if (tsb === null || tsb === undefined || !isFinite(tsb)) return { label: 'Sconosciuta', color: '#888', desc: 'Dati insufficienti', advice: 'Carica più attività su Strava per vedere la forma.' };
+  if (tsb >= 25)  return { label: 'Troppo riposata', color: '#A78BFA', desc: 'Rischio detraining se prolungato', advice: 'Aggiungi qualche stimolo qualità per non perdere fitness.' };
+  if (tsb >= 5)   return { label: 'Forma ottimale',  color: '#00E5C0', desc: 'Pronta per performance', advice: 'Finestra ideale per gare o test. Mantieni intensità.' };
+  if (tsb >= -10) return { label: 'Costruzione',     color: '#4D9EFF', desc: 'Carico produttivo, recupero ok', advice: 'Volume sano. Continua così, sei nel ritmo giusto.' };
+  if (tsb >= -20) return { label: 'Affaticata',      color: '#FFD24E', desc: 'Carico elevato, attenzione recupero', advice: 'Inserisci 1-2 giorni di recupero attivo nei prossimi 3 giorni.' };
+  return            { label: 'Sovraccarico',         color: '#FF4422', desc: 'Riduci carico immediatamente',     advice: 'Riduci volume del 30% per 4-7 giorni. Niente qualità.' };
 }
 
 // ─── Generator workout per Garmin ─────────────────────────────────────────────
@@ -530,6 +530,102 @@ function generateTodayWorkout(loadHistory, raceDateStr) {
   return { title:'Corsa easy', detail:'5 km a passo conversazionale.', distance:5, duration:32, pace:'6:00', intensity:'EASY' };
 }
 
+// ─── computePBsFromActivities: estrae i best effort 5K/10K/21K dalle attività ─
+// Restituisce { '5k': {time, seconds, pace, date}, '10k': ..., '21k': ... }
+// fallback = i PB hardcoded da usare se non si trovano
+function computePBsFromActivities(activities, fallback) {
+  if (!Array.isArray(activities) || activities.length === 0) return fallback;
+
+  // Cerchiamo l'attività con miglior best_efforts oppure best pace su distanze vicine
+  const targets = [
+    { key: '5k',  distMin: 4900, distMax: 5300, distKm: 5,      label: '5K' },
+    { key: '10k', distMin: 9700, distMax: 10500, distKm: 10,    label: '10K' },
+    { key: '21k', distMin: 20800, distMax: 21500, distKm: 21.097, label: '21K' },
+  ];
+
+  const out = {};
+  for (const t of targets) {
+    // Strava: best_efforts contiene segmenti specifici (Strava Premium/automatic)
+    let bestSec = Infinity;
+    let bestActDate = null;
+
+    for (const act of activities) {
+      // 1) Cerca dentro best_efforts se presente
+      if (Array.isArray(act.best_efforts)) {
+        const eff = act.best_efforts.find(e => Math.abs(e.distance - t.distKm * 1000) < 50);
+        if (eff && eff.elapsed_time && eff.elapsed_time < bestSec) {
+          bestSec = eff.elapsed_time;
+          bestActDate = act.start_date;
+        }
+      }
+      // 2) Match su attività intera con distanza in range
+      const dist = act.distance || 0;
+      if (dist >= t.distMin && dist <= t.distMax) {
+        const time = act.moving_time || act.elapsed_time;
+        if (time && time < bestSec) {
+          bestSec = time;
+          bestActDate = act.start_date;
+        }
+      }
+    }
+
+    if (bestSec === Infinity || !isFinite(bestSec)) {
+      out[t.key] = fallback?.[t.key] || null;
+    } else {
+      const m = Math.floor(bestSec / 60);
+      const s = Math.round(bestSec % 60);
+      const h = Math.floor(bestSec / 3600);
+      const time = h > 0
+        ? `${h}:${String(m % 60).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+        : `${m}:${String(s).padStart(2,'0')}`;
+      const paceSec = Math.round(bestSec / t.distKm);
+      const pm = Math.floor(paceSec / 60);
+      const ps = paceSec % 60;
+      const date = bestActDate ? new Date(bestActDate).toLocaleDateString('it-IT', { day:'numeric', month:'short', year:'numeric' }) : '—';
+      out[t.key] = {
+        distance: t.distKm,
+        time,
+        seconds: bestSec,
+        pace: `${pm}:${String(ps).padStart(2,'0')}/km`,
+        date,
+        fromStrava: true,
+      };
+    }
+  }
+  return out;
+}
+
+// ─── computeWeeklyAverage: km medi/sett. ultime N settimane (escludendo l'attuale) ─
+function computeWeeklyAverage(trainingData, weeks = 4) {
+  if (!Array.isArray(trainingData) || trainingData.length === 0) {
+    return { avgKm: 0, avgRuns: 0, weeks: 0 };
+  }
+  const now = new Date();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  monday.setHours(0,0,0,0);
+
+  const buckets = []; // [{ km, runs }, ...] ultime N settimane (esclusa quella corrente)
+  for (let w = 1; w <= weeks; w++) {
+    const start = new Date(monday); start.setDate(monday.getDate() - w * 7);
+    const end = new Date(monday); end.setDate(monday.getDate() - (w - 1) * 7);
+    const inWeek = trainingData.filter(a => {
+      const d = new Date(a.date);
+      return d >= start && d < end;
+    });
+    if (inWeek.length > 0) {
+      buckets.push({
+        km: inWeek.reduce((s, a) => s + (a.distance_km || 0), 0),
+        runs: inWeek.length,
+      });
+    }
+  }
+  if (buckets.length === 0) return { avgKm: 0, avgRuns: 0, weeks: 0 };
+  const avgKm = buckets.reduce((s, b) => s + b.km, 0) / buckets.length;
+  const avgRuns = buckets.reduce((s, b) => s + b.runs, 0) / buckets.length;
+  return { avgKm, avgRuns, weeks: buckets.length };
+}
+
 // Export
 Object.assign(window, {
   estimateMaxHR, getHRZones,
@@ -538,4 +634,5 @@ Object.assign(window, {
   calculateDecoupling, detectOvertraining,
   getFormLabel, generateWorkout, generateTodayWorkout, suggestPlanAdjustment,
   paceStringToSec, activitiesToTrainingData,
+  computePBsFromActivities, computeWeeklyAverage,
 });

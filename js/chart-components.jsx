@@ -1,12 +1,41 @@
 // js/chart-components.jsx — Componenti chart aggiuntivi (RacePredictionCard)
 const { useMemo: useMemoCC } = React;
 
-// ─── RacePredictionCard: predizione tempo gara con confronto target ──────────
-function RacePredictionCard({ prediction, target, raceName }) {
-  if (!prediction) return null;
+// ─── helper format secondi → "h:mm:ss" o "m:ss" ───
+function _fmtSec(sec) {
+  if (!isFinite(sec) || sec <= 0) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.round(sec % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+function _fmtPace(secPerKm) {
+  if (!isFinite(secPerKm) || secPerKm <= 0) return '—';
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
 
-  // prediction = { time: "1:55:32", seconds: ..., vdot: ..., basedOn: '21k' }
-  // target = "1:58:00"
+// ─── RacePredictionCard: predizione tempo gara con confronto target ──────────
+// prediction = { predicted, optimistic, conservative, vdot, sources, tsbFactor }
+function RacePredictionCard({ prediction, target, raceName, distanceKm = 21.097 }) {
+  if (!prediction || !isFinite(prediction.predicted)) {
+    return (
+      <GlowCard glow={NEON.purple} intensity={0.1}>
+        <div style={{ display:'flex', alignItems:'center', gap: 12 }}>
+          <div style={{ fontSize: 22, opacity: 0.6 }}>🎯</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: NEON.text, fontSize: 13, fontWeight: 700 }}>Predizione non disponibile</div>
+            <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 3, lineHeight: 1.4 }}>
+              Servono almeno una corsa su 5K, 10K o 21K per stimare il tempo gara.
+            </div>
+          </div>
+        </div>
+      </GlowCard>
+    );
+  }
+
   const targetSec = useMemoCC(() => {
     if (!target) return null;
     const parts = target.split(':').map(Number);
@@ -15,12 +44,19 @@ function RacePredictionCard({ prediction, target, raceName }) {
     return null;
   }, [target]);
 
-  const diff = targetSec ? prediction.seconds - targetSec : 0;
-  const ahead = diff < 0; // predetto più veloce di target
-  const diffMin = Math.abs(Math.floor(diff / 60));
-  const diffSec = Math.abs(Math.round(diff % 60));
-  const diffLabel = `${ahead ? '−' : '+'}${diffMin}:${String(diffSec).padStart(2,'0')}`;
+  const predicted = prediction.predicted;
+  const predictedTime = _fmtSec(predicted);
+  const predictedPace = _fmtPace(predicted / distanceKm);
+
+  const diff = isFinite(targetSec) ? predicted - targetSec : 0;
+  const ahead = diff < 0;
+  const diffMin = Math.abs(Math.floor(Math.abs(diff) / 60));
+  const diffSec = Math.abs(Math.round(Math.abs(diff) % 60));
   const diffColor = ahead ? NEON.teal : NEON.orange;
+
+  const sourceLabel = prediction.sources?.length
+    ? prediction.sources.map(s => s === '21k' ? '21K' : s === '10k' ? '10K' : '5K').join(' + ')
+    : '—';
 
   return (
     <GlowCard glow={NEON.purple} intensity={0.18}>
@@ -29,13 +65,15 @@ function RacePredictionCard({ prediction, target, raceName }) {
           <div style={{ color: NEON.textFaint, fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' }}>STIMA TEMPO</div>
           <div style={{ color: NEON.text, fontSize: 13, fontWeight: 600, marginTop: 2 }}>{raceName || 'Mezza maratona'}</div>
         </div>
-        <div style={{
-          background: 'rgba(167,139,250,0.15)',
-          border: '1px solid rgba(167,139,250,0.35)',
-          color: NEON.purple,
-          fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
-          padding: '4px 8px', borderRadius: 6,
-        }}>VDOT {prediction.vdot}</div>
+        {prediction.vdot && (
+          <div style={{
+            background: 'rgba(167,139,250,0.15)',
+            border: '1px solid rgba(167,139,250,0.35)',
+            color: NEON.purple,
+            fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
+            padding: '4px 8px', borderRadius: 6,
+          }}>VDOT {prediction.vdot}</div>
+        )}
       </div>
 
       {/* Big predicted time */}
@@ -48,14 +86,19 @@ function RacePredictionCard({ prediction, target, raceName }) {
           lineHeight: 1,
           fontVariantNumeric: 'tabular-nums',
           textShadow: `0 0 20px ${NEON.purple}66`,
-        }}>{prediction.time}</div>
+        }}>{predictedTime}</div>
         <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 6 }}>
-          predizione attuale · passo {prediction.pace}/km
+          predizione · passo {predictedPace}/km
         </div>
+        {(prediction.optimistic && prediction.conservative) && (
+          <div style={{ color: NEON.textFaint, fontSize: 10, marginTop: 4 }}>
+            range: {_fmtSec(prediction.optimistic)} – {_fmtSec(prediction.conservative)}
+          </div>
+        )}
       </div>
 
       {/* Target comparison */}
-      {targetSec && (
+      {isFinite(targetSec) && targetSec > 0 && (
         <div style={{
           marginTop: 4,
           padding: '12px 14px',
@@ -67,18 +110,16 @@ function RacePredictionCard({ prediction, target, raceName }) {
           <div>
             <div style={{ color: NEON.textDim, fontSize: 10, fontWeight: 600, letterSpacing: '0.05em' }}>vs TARGET {target}</div>
             <div style={{ color: diffColor, fontSize: 16, fontWeight: 800, letterSpacing: '-0.01em', marginTop: 2 }}>
-              {ahead ? 'In anticipo di' : 'In ritardo di'} {diffLabel.replace(/^[−+]/, '')}
+              {ahead ? 'In anticipo di' : 'In ritardo di'} {diffMin}:{String(diffSec).padStart(2,'0')}
             </div>
           </div>
           <div style={{ fontSize: 24 }}>{ahead ? '🎯' : '💪'}</div>
         </div>
       )}
 
-      {prediction.basedOn && (
-        <div style={{ color: NEON.textFaint, fontSize: 10, marginTop: 10, textAlign:'center' }}>
-          Calcolato dal tuo PB su {prediction.basedOn === '21k' ? '21K' : prediction.basedOn === '10k' ? '10K' : '5K'} con correzione forma TSB
-        </div>
-      )}
+      <div style={{ color: NEON.textFaint, fontSize: 10, marginTop: 10, textAlign:'center' }}>
+        Calcolato da PB su {sourceLabel} · {prediction.confidence ? `confidenza ${prediction.confidence}` : ''} · correzione forma TSB
+      </div>
     </GlowCard>
   );
 }
