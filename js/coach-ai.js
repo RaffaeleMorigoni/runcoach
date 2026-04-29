@@ -1,5 +1,6 @@
-// js/coach-ai.js — Wrapper client per chiamare /api/coach (Gemini).
-// Pesca automaticamente i dati dall'engine deterministico (coach-engine.jsx).
+// js/coach-ai.js — Wrapper client per /api/chat (Claude via Anthropic).
+// Pesca automaticamente i dati dall'engine deterministico (coach-engine.jsx)
+// e invia il contesto strutturato al backend.
 
 (function () {
   'use strict';
@@ -16,13 +17,10 @@
       throw new Error('userMessage richiesto.');
     }
 
-    const context = buildCoachContext(extraContext);
-    const messages = [
-      ...history,
-      { role: 'user', content: userMessage },
-    ];
+    const context  = buildCoachContext(extraContext);
+    const messages = [...history, { role: 'user', content: userMessage }];
 
-    const r = await fetch('/api/coach', {
+    const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, context }),
@@ -31,13 +29,13 @@
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = data?.error || `Coach API error ${r.status}`;
-      throw new Error(msg + (data?.detail ? ` — ${data.detail}` : ''));
+      throw new Error(msg);
     }
-    return data.text || '';
+    return data.reply || data.text || '';
   }
 
   /**
-   * Costruisce il payload "context" per /api/coach.
+   * Costruisce il payload "context" per /api/chat.
    * Pesca dai globals esposti da coach-engine.jsx + eventuali override.
    */
   function buildCoachContext(override = {}) {
@@ -56,19 +54,22 @@
       ? window.computeWeeklyAverage(trainingData, 4)
       : { avgKm: 0 };
 
-    // Overtraining (se l'engine lo ha già calcolato altrove, override.form lo passa)
-    const ot = window.detectOvertraining
-      ? window.detectOvertraining(loadHistory.slice(-28), trainingData.slice(-14))
-      : null;
+    // Overtraining risk (best effort)
+    let otRisk = null;
+    try {
+      if (window.detectOvertraining && loadHistory.length) {
+        const ot = window.detectOvertraining(loadHistory.slice(-28), trainingData.slice(-14));
+        otRisk = ot?.risk || null;
+      }
+    } catch {}
 
     // Race goal: data + giorni rimanenti
     let raceGoal = override.raceGoal || window.raceGoal || null;
     if (raceGoal && raceGoal.date && raceGoal.daysToRace == null) {
       const d = new Date(raceGoal.date);
-      raceGoal = {
-        ...raceGoal,
-        daysToRace: Math.ceil((d - new Date()) / 86400000),
-      };
+      if (!isNaN(d.getTime())) {
+        raceGoal = { ...raceGoal, daysToRace: Math.ceil((d - new Date()) / 86400000) };
+      }
     }
 
     // Ultime 5 attività in ordine cronologico decrescente
@@ -80,13 +81,13 @@
     return {
       athlete: override.athlete || window.athlete || {},
       form: override.form || {
-        ctl: lastLoad.ctl,
-        atl: lastLoad.atl,
-        tsb: lastLoad.tsb,
-        label: formLabel?.label,
-        vdot: window.currentVDOT || null,
-        weeklyKm: weekly?.avgKm ? +weekly.avgKm.toFixed(1) : null,
-        overtrainingRisk: ot?.risk || null,
+        ctl:              lastLoad.ctl,
+        atl:              lastLoad.atl,
+        tsb:              lastLoad.tsb,
+        label:            formLabel?.label,
+        vdot:             window.currentVDOT || null,
+        weeklyKm:         weekly?.avgKm ? +weekly.avgKm.toFixed(1) : null,
+        overtrainingRisk: otRisk,
       },
       recentActivities: recent,
       raceGoal,
