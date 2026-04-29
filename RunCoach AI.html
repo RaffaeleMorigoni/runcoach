@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RunCoach AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    html, body { height:100%; overflow:hidden; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #020208;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #root { display:flex; align-items:center; justify-content:center; width:100%; height:100vh; }
+    ::-webkit-scrollbar { display:none; }
+    input::placeholder { color: rgba(238,238,248,0.3); }
+    button { font-family: 'DM Sans', sans-serif; }
+    input  { font-family: 'DM Sans', sans-serif; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="js/shared.jsx"></script>
+<script type="text/babel" src="js/home.jsx"></script>
+<script type="text/babel" src="js/screens.jsx"></script>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accentColor": "#00CFA8",
+  "userName": "Sarah",
+  "recoveryScore": 78,
+  "garminConnected": true
+}/*EDITMODE-END*/;
+
+// ─── Tweaks Panel ─────────────────────────────────────────────────────────────
+function TweaksPanel({ tweaks, onChange }) {
+  return (
+    <div style={{
+      position:'absolute', bottom:90, right:10, zIndex:200,
+      background:'#141428', border:'1px solid rgba(255,255,255,0.12)',
+      borderRadius:16, padding:16, width:200,
+      boxShadow:'0 8px 40px rgba(0,0,0,0.6)',
+    }}>
+      <div style={{ color:'#EEEEF8', fontWeight:700, fontSize:13, marginBottom:14 }}>Tweaks</div>
+
+      <div style={{ color:'rgba(238,238,248,0.45)', fontSize:10, fontWeight:600, letterSpacing:'0.06em', marginBottom:7 }}>COLORE ACCENTO</div>
+      <div style={{ display:'flex', gap:7, marginBottom:14 }}>
+        {[['#FF4422','Orange'],['#4D9EFF','Blue'],['#00CFA8','Teal'],['#A78BFA','Purple']].map(([col, lbl]) => (
+          <div key={col} title={lbl} onClick={() => onChange('accentColor', col)} style={{
+            width:26, height:26, borderRadius:13, background:col, cursor:'pointer',
+            border: tweaks.accentColor === col ? '3px solid white' : '2px solid transparent',
+            transition:'border 0.15s',
+          }}/>
+        ))}
+      </div>
+
+      <div style={{ color:'rgba(238,238,248,0.45)', fontSize:10, fontWeight:600, letterSpacing:'0.06em', marginBottom:7 }}>PUNTEGGIO RECUPERO</div>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+        <input type="range" min={20} max={100} step={1} value={tweaks.recoveryScore}
+          onChange={e => onChange('recoveryScore', +e.target.value)}
+          style={{ flex:1, accentColor: tweaks.accentColor }}/>
+        <span style={{ color:'#EEEEF8', fontSize:12, fontWeight:700, width:26, textAlign:'right' }}>{tweaks.recoveryScore}</span>
+      </div>
+
+      <div style={{ color:'rgba(238,238,248,0.45)', fontSize:10, fontWeight:600, letterSpacing:'0.06em', marginBottom:7 }}>NOME RUNNER</div>
+      <input value={tweaks.userName} onChange={e => onChange('userName', e.target.value)}
+        style={{ width:'100%', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', borderRadius:8, padding:'6px 10px', color:'#EEEEF8', fontSize:12, outline:'none', marginBottom:14 }}/>
+
+      <div style={{ color:'rgba(238,238,248,0.45)', fontSize:10, fontWeight:600, letterSpacing:'0.06em', marginBottom:7 }}>STATO GARMIN</div>
+      <div onClick={() => onChange('garminConnected', !tweaks.garminConnected)} style={{
+        display:'flex', alignItems:'center', gap:8, cursor:'pointer',
+        background: tweaks.garminConnected ? 'rgba(77,158,255,0.15)' : 'rgba(255,255,255,0.05)',
+        border:`1px solid ${tweaks.garminConnected ? 'rgba(77,158,255,0.35)' : 'rgba(255,255,255,0.1)'}`,
+        borderRadius:8, padding:'7px 10px',
+      }}>
+        <div style={{ width:8, height:8, borderRadius:4, background: tweaks.garminConnected ? '#4D9EFF' : 'rgba(238,238,248,0.3)' }}/>
+        <span style={{ color: tweaks.garminConnected ? '#4D9EFF' : 'rgba(238,238,248,0.4)', fontSize:12, fontWeight:500 }}>
+          {tweaks.garminConnected ? 'Garmin Connesso' : 'Garmin Disconnesso'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Background canvas ────────────────────────────────────────────────────────
+function Background({ accent }) {
+  return (
+    <div style={{ position:'fixed', inset:0, overflow:'hidden', pointerEvents:'none', zIndex:0 }}>
+      <div style={{ position:'absolute', top:'-10%', left:'-10%', width:'60%', height:'60%', background:`radial-gradient(circle, ${accent}18 0%, transparent 70%)`, filter:'blur(40px)' }} />
+      <div style={{ position:'absolute', bottom:'-15%', right:'-5%', width:'50%', height:'50%', background:`radial-gradient(circle, #A78BFA14 0%, transparent 70%)`, filter:'blur(40px)' }} />
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+function App() {
+  const saved = (() => { try { return JSON.parse(localStorage.getItem('rca_state') || '{}'); } catch { return {}; } })();
+  const [screen, setScreen] = useState(saved.screen || 'home');
+  const [workoutData, setWorkoutData] = useState(null);
+  const [tweaks, setTweaks] = useState({ ...TWEAK_DEFAULTS, ...(saved.tweaks || {}) });
+  const [tweaksVisible, setTweaksVisible] = useState(false);
+
+  // Persist state
+  useEffect(() => {
+    localStorage.setItem('rca_state', JSON.stringify({ screen, tweaks }));
+  }, [screen, tweaks]);
+
+  // Tweaks protocol
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.data?.type === '__activate_edit_mode')   setTweaksVisible(true);
+      if (e.data?.type === '__deactivate_edit_mode') setTweaksVisible(false);
+    };
+    window.addEventListener('message', handler);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const handleTweakChange = (key, val) => {
+    const next = { ...tweaks, [key]: val };
+    setTweaks(next);
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [key]: val } }, '*');
+  };
+
+  const navTo = (target, data) => {
+    if (target === 'workout' && data) setWorkoutData(data);
+    setScreen(target);
+  };
+
+  const goBack = () => setScreen('home');
+
+  // Which screen to render
+  const renderScreen = () => {
+    switch (screen) {
+      case 'home':     return <HomeScreen     onNav={navTo} tweaks={tweaks} />;
+      case 'plan':     return <PlanScreen     onNav={navTo} tweaks={tweaks} />;
+      case 'workout':  return <WorkoutScreen  workout={workoutData || TODAY_WORKOUT} onBack={goBack} tweaks={tweaks} />;
+      case 'coach':    return <CoachScreen    tweaks={tweaks} />;
+      case 'progress': return <ProgressScreen tweaks={tweaks} />;
+      case 'recovery': return <RecoveryScreen tweaks={tweaks} />;
+      default:         return <HomeScreen     onNav={navTo} tweaks={tweaks} />;
+    }
+  };
+
+  const showNav = screen !== 'workout';
+  const navScreen = screen === 'recovery' ? 'recovery' : screen;
+
+  return (
+    <>
+      <Background accent={tweaks.accentColor} />
+      <div style={{ position:'relative', zIndex:1 }}>
+        <PhoneFrame accentColor={tweaks.accentColor}>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', position:'relative' }}>
+            {renderScreen()}
+          </div>
+          {showNav && (
+            <BottomNav
+              current={navScreen}
+              onChange={(t) => { setWorkoutData(null); setScreen(t); }}
+            />
+          )}
+          {tweaksVisible && (
+            <TweaksPanel tweaks={tweaks} onChange={handleTweakChange} />
+          )}
+        </PhoneFrame>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
