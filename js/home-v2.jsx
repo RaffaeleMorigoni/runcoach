@@ -10,8 +10,9 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
     (async () => {
       try {
         if (auth) {
+          // Carica fino a 200 attività (massimo Strava per page) per avere lo storico completo.
           const [acts, ath] = await Promise.all([
-            fetchActivities(auth, 30),
+            fetchActivities(auth, 200),
             fetchAthlete(auth).catch(() => null),
           ]);
           setActivities(acts);
@@ -25,8 +26,13 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
   const trainingData = useMemoH2(() => activitiesToTrainingData(activities), [activities]);
   const loadHistory  = useMemoH2(() => calculateTrainingLoad(trainingData, 30), [trainingData]);
   const last         = loadHistory[loadHistory.length - 1] || { ctl: 0, atl: 0, tsb: 0 };
+  // Safe: garantisce che ctl/atl/tsb siano numeri finiti (evita NaN in UI)
+  const safeNum = (v, d = 0) => Number.isFinite(+v) ? +v : d;
+  const ctlVal  = safeNum(last.ctl);
+  const atlVal  = safeNum(last.atl);
+  const tsbVal  = safeNum(last.tsb);
   const overTr       = useMemoH2(() => detectOvertraining(loadHistory, trainingData.slice(-7)), [loadHistory, trainingData]);
-  const form         = getFormLabel(last.tsb);
+  const form         = getFormLabel(tsbVal);
 
   // PB calcolati dalle attività Strava (fallback ai PB hardcoded)
   const pbs = useMemoH2(() => computePBsFromActivities(activities, PB), [activities]);
@@ -35,13 +41,61 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
   const avgWeekly = useMemoH2(() => computeWeeklyAverage(trainingData, 4), [trainingData]);
 
   // Workout di oggi (relativo alla gara)
-  const todayWorkout = useMemoH2(() => generateTodayWorkout(loadHistory, USER.raceDate), [loadHistory]);
+  const todayWorkout = useMemoH2(() => generateTodayWorkout(loadHistory, USER.raceDateISO || USER.raceDate), [loadHistory]);
 
-  // Race countdown
+  // ─── Ricalibrazione piano automatica ───────────────────────────────────────
+  // Carica il piano precedente da localStorage, ricalibra, salva il nuovo
+  const recal = useMemoH2(() => {
+    if (loading || activities.length === 0) return null;
+    let lastPlan = null;
+    try {
+      const raw = localStorage.getItem('rc_lastPlan');
+      if (raw) lastPlan = JSON.parse(raw);
+    } catch(e) {}
+    return recalibratePlan({
+      activities,
+      loadHistory,
+      raceDateStr: USER.raceDateISO || USER.raceDate,
+      lastPlan,
+    });
+  }, [loadHistory, activities, loading]);
+
+  // Banner dismiss state — persiste su localStorage per timestamp del recalc
+  const recalKey = recal?.timestamp?.slice(0, 10) || '';
+  const [bannerDismissed, setBannerDismissed] = useStateH2(false);
+  useEffectH2(() => {
+    if (!recalKey) return;
+    const dismissed = localStorage.getItem('rc_recalDismissed_' + recalKey);
+    setBannerDismissed(!!dismissed);
+  }, [recalKey]);
+
+  // Salva il piano corrente per confronto al prossimo refresh
+  useEffectH2(() => {
+    if (recal?.plan) {
+      try {
+        localStorage.setItem('rc_lastPlan', JSON.stringify(recal.plan.map(d => ({
+          date: d.date, workout: d.workout
+        }))));
+      } catch(e) {}
+    }
+  }, [recal?.timestamp]);
+
+  const showBanner = recal && recal.changes.length > 0 && !bannerDismissed;
+  const dismissBanner = () => {
+    if (recalKey) localStorage.setItem('rc_recalDismissed_' + recalKey, '1');
+    setBannerDismissed(true);
+  };
+
+  // Race countdown — usa raceDateISO (parsabile), fallback su USER.daysToRace
   const daysToRace = useMemoH2(() => {
-    const race = new Date(USER.raceDate);
-    const now = new Date();
-    return Math.max(0, Math.ceil((race - now) / 86400000));
+    const iso = USER.raceDateISO || (typeof USER.raceDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(USER.raceDate) ? USER.raceDate : null);
+    if (iso) {
+      const race = new Date(iso + 'T12:00:00');
+      const now = new Date();
+      const d = Math.ceil((race - now) / 86400000);
+      if (Number.isFinite(d)) return Math.max(0, d);
+    }
+    return Number.isFinite(USER.daysToRace) ? USER.daysToRace : 0;
   }, []);
 
   // Settimana km progress (target = media reale ultime 4 sett, fallback a tweak)
@@ -50,13 +104,19 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
     const monday = new Date(now);
     monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
     monday.setHours(0,0,0,0);
-    const weekActs = trainingData.filter(a => new Date(a.date) >= monday);
-    const target = avgWeekly.avgKm > 0 ? Math.round(avgWeekly.avgKm) : (tweaks.weeklyKm || 25);
+    const weekActs = trainingData.filter(a => {
+      const d = new Date(a.date);
+      return Number.isFinite(d.getTime()) && d >= monday;
+    });
+    const kmDoneRaw = weekActs.reduce((s, a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
+    const kmDone = Number.isFinite(kmDoneRaw) ? kmDoneRaw : 0;
+    const avg = Number.isFinite(+avgWeekly?.avgKm) ? +avgWeekly.avgKm : 0;
+    const target = avg > 0 ? Math.round(avg) : (Number.isFinite(+tweaks?.weeklyKm) ? +tweaks.weeklyKm : 25);
     return {
-      kmDone: weekActs.reduce((s, a) => s + (a.distance_km || 0), 0),
+      kmDone,
       kmTarget: target,
       runs: weekActs.length,
-      isAvg: avgWeekly.avgKm > 0,
+      isAvg: avg > 0,
     };
   }, [trainingData, avgWeekly, tweaks.weeklyKm]);
 
@@ -174,12 +234,12 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
               <AnimatedRing
                 size={86}
                 stroke={7}
-                value={Math.min(70, last.ctl)}
+                value={Math.min(70, ctlVal)}
                 max={70}
                 color={NEON.teal}
               >
                 <div style={{ textAlign:'center' }}>
-                  <div style={{ color: NEON.teal, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${NEON.teal}66` }}>{Math.round(last.ctl)}</div>
+                  <div style={{ color: NEON.teal, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${NEON.teal}66` }}>{Math.round(ctlVal)}</div>
                   <div style={{ color: NEON.textFaint, fontSize: 8, fontWeight: 700, letterSpacing: '0.05em' }}>CTL</div>
                 </div>
               </AnimatedRing>
@@ -191,12 +251,12 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
               <AnimatedRing
                 size={86}
                 stroke={7}
-                value={Math.min(80, last.atl)}
+                value={Math.min(80, atlVal)}
                 max={80}
                 color={NEON.orange}
               >
                 <div style={{ textAlign:'center' }}>
-                  <div style={{ color: NEON.orange, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${NEON.orange}66` }}>{Math.round(last.atl)}</div>
+                  <div style={{ color: NEON.orange, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${NEON.orange}66` }}>{Math.round(atlVal)}</div>
                   <div style={{ color: NEON.textFaint, fontSize: 8, fontWeight: 700, letterSpacing: '0.05em' }}>ATL</div>
                 </div>
               </AnimatedRing>
@@ -208,13 +268,13 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
               <AnimatedRing
                 size={86}
                 stroke={7}
-                value={Math.max(0, Math.min(60, last.tsb + 30))}
+                value={Math.max(0, Math.min(60, tsbVal + 30))}
                 max={60}
                 color={form.color}
               >
                 <div style={{ textAlign:'center' }}>
                   <div style={{ color: form.color, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${form.color}66` }}>
-                    {last.tsb >= 0 ? '+' : ''}{Math.round(last.tsb)}
+                    {tsbVal >= 0 ? '+' : ''}{Math.round(tsbVal)}
                   </div>
                   <div style={{ color: NEON.textFaint, fontSize: 8, fontWeight: 700, letterSpacing: '0.05em' }}>TSB</div>
                 </div>
@@ -317,6 +377,74 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
         </div>
       </div>
 
+      {/* Ultime corse da Strava */}
+      {activities && activities.length > 0 && (
+        <div style={{ padding: '0 14px 14px' }}>
+          <SectionHeader kicker="STRAVA" title="Ultime corse" color={NEON.orange}/>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {activities.slice(0, 5).map((a, i) => {
+              const km = a.distance ? (a.distance / 1000) : 0;
+              const mins = a.moving_time ? Math.round(a.moving_time / 60) : 0;
+              const paceSec = a.average_speed ? 1000 / a.average_speed : null;
+              const paceStr = paceSec
+                ? `${Math.floor(paceSec/60)}:${String(Math.round(paceSec%60)).padStart(2,'0')}/km`
+                : '—';
+              const hr = a.average_heartrate ? Math.round(a.average_heartrate) : null;
+              const date = a.start_date_local || a.start_date;
+              const d = date ? new Date(date) : null;
+              const dateStr = d && Number.isFinite(d.getTime())
+                ? d.toLocaleDateString('it-IT', { day: '2-digit', month: 'short', weekday: 'short' })
+                : '';
+              const isRace = (a.workout_type === 1) || /gara|race/i.test(a.name || '');
+              const accentColor = isRace ? NEON.orange : (km >= 14 ? NEON.blue : (paceSec && paceSec < 320 ? NEON.yellow : NEON.teal));
+
+              return (
+                <div key={a.id || i} style={{
+                  background: NEON.bg2,
+                  border: `1px solid ${accentColor}22`,
+                  borderRadius: 14,
+                  padding: 12,
+                  display: 'flex',
+                  gap: 12,
+                  alignItems: 'center',
+                }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 22,
+                    background: `${accentColor}22`,
+                    border: `1px solid ${accentColor}66`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                    fontSize: 20,
+                  }}>
+                    {isRace ? '🏁' : (km >= 14 ? '🏔' : (paceSec && paceSec < 320 ? '⚡' : '🏃'))}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                      <div style={{
+                        color: NEON.text, fontSize: 13, fontWeight: 700,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        maxWidth: '70%',
+                      }}>
+                        {a.name || 'Run'}
+                      </div>
+                      <div style={{ color: NEON.textDim, fontSize: 10, flexShrink: 0 }}>{dateStr}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 4, alignItems: 'baseline' }}>
+                      <div style={{ color: accentColor, fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em' }}>
+                        {km.toFixed(2)}<span style={{ fontSize: 10, color: NEON.textDim, fontWeight: 600 }}>km</span>
+                      </div>
+                      <div style={{ color: NEON.textDim, fontSize: 12 }}>{paceStr}</div>
+                      <div style={{ color: NEON.textDim, fontSize: 12 }}>{mins}min</div>
+                      {hr && <div style={{ color: NEON.textDim, fontSize: 12 }}>{hr}♥</div>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Settimana progress */}
       <div style={{ padding: '0 14px 14px' }}>
         <GlowCard glow={NEON.teal} intensity={0.1}>
@@ -329,7 +457,7 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
             </div>
             <div style={{ textAlign:'right' }}>
               <div style={{ color: NEON.teal, fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>
-                {weekStats.kmDone.toFixed(1)}
+                {(Number.isFinite(weekStats.kmDone) ? weekStats.kmDone : 0).toFixed(1)}
                 <span style={{ color: NEON.textDim, fontSize: 12, fontWeight: 600 }}> / {weekStats.kmTarget} km</span>
               </div>
               <div style={{ color: NEON.textDim, fontSize: 10 }}>{weekStats.runs} uscite</div>

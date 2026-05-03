@@ -459,6 +459,162 @@ function suggestPlanAdjustment(loadAnalysis, plannedWorkout, daysToRace) {
   return { suggestions, shouldRecalibrate: suggestions.length > 0 };
 }
 
+// ─── Genera piano settimanale: 7 giorni a partire da oggi ────────────────────
+// Ogni giorno: { date, dow, label, workout, isToday, isPast }
+function generateWeekPlan(loadHistory, raceDateStr) {
+  const days = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today.getTime() + i * 86400000);
+    const dateIso = d.toISOString().slice(0, 10);
+    // Genera workout a quella data: simulo daysToRace per quella data
+    const race = new Date(raceDateStr);
+    const daysFromThatDay = Math.ceil((race - d) / 86400000);
+    const fakeRaceDate = new Date(today.getTime() + daysFromThatDay * 86400000).toISOString();
+    const w = generateTodayWorkout(loadHistory, fakeRaceDate);
+    days.push({
+      date: dateIso,
+      dow: d.getDay(),
+      dayLabel: d.toLocaleDateString('it-IT', { weekday: 'short' }),
+      dateLabel: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }),
+      workout: w,
+      isToday: i === 0,
+      daysFromRace: daysFromThatDay,
+    });
+  }
+  return days;
+}
+
+// ─── Detector missed sessions: confronta piano vs realtà ─────────────────────
+// Prende activities Strava degli ultimi 7gg + il piano settimanale precedente
+// Restituisce array di { date, planned, actual, status: 'done'|'missed'|'partial'|'overdone' }
+function compareActualVsPlanned(activities, plannedWeekIso) {
+  if (!activities || !plannedWeekIso) return [];
+  const result = [];
+  for (const day of plannedWeekIso) {
+    const dayActivities = activities.filter(a => {
+      const aDate = new Date(a.start_date_local || a.start_date).toISOString().slice(0, 10);
+      return aDate === day.date;
+    });
+    const totalKm = dayActivities.reduce((s, a) => s + (a.distance || 0) / 1000, 0);
+    const planned = day.workout;
+    const plannedKm = planned?.distance || 0;
+
+    let status = 'pending';
+    if (plannedKm === 0 && totalKm === 0) status = 'rest_ok';
+    else if (plannedKm === 0 && totalKm > 0) status = 'overdone';
+    else if (plannedKm > 0 && totalKm === 0) status = 'missed';
+    else if (totalKm >= plannedKm * 0.8) status = 'done';
+    else if (totalKm > 0) status = 'partial';
+
+    result.push({
+      date: day.date,
+      planned: planned,
+      actualKm: totalKm,
+      activities: dayActivities,
+      status,
+    });
+  }
+  return result;
+}
+
+// ─── Ricalibrazione completa: produce changes con ragioni ────────────────────
+// Restituisce { changes: [{day, from, to, reason}], summary, severity }
+function recalibratePlan({ activities, loadHistory, raceDateStr, lastPlan }) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const race = new Date(raceDateStr);
+  const daysToRace = Math.ceil((race - today) / 86400000);
+  const last = loadHistory[loadHistory.length - 1] || { tsb: 0, ctl: 30, atl: 30 };
+
+  const changes = [];
+  let severity = 'info'; // info | warn | critical
+
+  // 1. Confronta ultimi 7gg con piano precedente
+  let missedCount = 0;
+  let partialCount = 0;
+  if (lastPlan) {
+    const comparison = compareActualVsPlanned(activities, lastPlan);
+    for (const c of comparison) {
+      if (c.status === 'missed' && c.planned?.distance > 0) missedCount++;
+      if (c.status === 'partial') partialCount++;
+    }
+  }
+
+  // 2. Genera nuovo piano
+  const newPlan = generateWeekPlan(loadHistory, raceDateStr);
+
+  // 3. Decisioni di ricalibrazione
+  if (last.tsb < -20) {
+    severity = 'critical';
+    changes.push({
+      day: 'oggi',
+      type: 'reduce_load',
+      reason: `TSB ${Math.round(last.tsb)} — sei in deficit profondo. Sostituisco workout intenso con easy.`,
+    });
+    // Trasforma il primo workout intenso della settimana in easy
+    for (const day of newPlan) {
+      if (['TEMPO', 'VO2', 'LUNGO'].includes(day.workout?.intensity)) {
+        day.workout = {
+          title: 'Recupero attivo',
+          detail: 'Cambio piano: serve recupero. Easy ' + (day.workout.distance ? Math.round(day.workout.distance * 0.6) + 'km' : '4km'),
+          distance: day.workout.distance ? day.workout.distance * 0.6 : 4,
+          duration: Math.round((day.workout.duration || 30) * 0.6),
+          pace: '6:10',
+          intensity: 'EASY',
+          modified: true,
+        };
+        break;
+      }
+    }
+  } else if (missedCount >= 2) {
+    severity = 'warn';
+    changes.push({
+      day: 'settimana',
+      type: 'volume_drop',
+      reason: `Hai saltato ${missedCount} sessioni la settimana scorsa. Riduco il volume di questa settimana del 20%.`,
+    });
+    for (const day of newPlan) {
+      if (day.workout?.distance > 0) {
+        day.workout = { ...day.workout, distance: day.workout.distance * 0.8, modified: true };
+      }
+    }
+  } else if (last.tsb > 15 && daysToRace > 14) {
+    severity = 'info';
+    changes.push({
+      day: 'settimana',
+      type: 'add_quality',
+      reason: `Forma fresca (TSB +${Math.round(last.tsb)}) e ${daysToRace}gg alla gara — è il momento di stimolare. Confermo qualità del piano.`,
+    });
+  }
+
+  // 4. Vicino alla gara: priorità freschezza
+  if (daysToRace <= 10 && daysToRace > 0 && last.atl > last.ctl * 1.1) {
+    if (severity !== 'critical') severity = 'warn';
+    changes.push({
+      day: 'taper',
+      type: 'taper_emphasis',
+      reason: `${daysToRace}gg alla gara con fatica acuta alta — il taper deve essere rigoroso. Niente esperimenti.`,
+    });
+  }
+
+  let summary = '';
+  if (changes.length === 0) summary = 'Piano confermato — nessun aggiustamento necessario.';
+  else if (severity === 'critical') summary = 'Piano ricalibrato per recupero urgente.';
+  else if (severity === 'warn') summary = 'Piano aggiustato in base ai tuoi ultimi giorni.';
+  else summary = 'Piccoli aggiustamenti al piano della settimana.';
+
+  return {
+    plan: newPlan,
+    changes,
+    summary,
+    severity,
+    metrics: { missedCount, partialCount, tsb: last.tsb, daysToRace },
+    timestamp: new Date().toISOString(),
+  };
+}
+
 // ─── Helper: parse pace string "5:35/km" → secondi ────────────────────────────
 function paceStringToSec(str) {
   if (!str) return null;
@@ -633,6 +789,7 @@ Object.assign(window, {
   calculateVDOT, predictTimeFromVDOT, predictRaceTime,
   calculateDecoupling, detectOvertraining,
   getFormLabel, generateWorkout, generateTodayWorkout, suggestPlanAdjustment,
+  generateWeekPlan, compareActualVsPlanned, recalibratePlan,
   paceStringToSec, activitiesToTrainingData,
   computePBsFromActivities, computeWeeklyAverage,
 });

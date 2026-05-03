@@ -210,27 +210,70 @@ function PlanScreenM({ onNav, tweaks }) {
 }
 
 // ─── Coach Chat ───────────────────────────────────────────────────────────────
-function CoachScreenM({ tweaks, onNav }) {
+// Helper: chiama /api/chat (Gemini) o fallback a window.claude in preview
+async function callCoachAI({ system, messages }) {
+  // Endpoint Vercel/Edge → Gemini API
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system, messages }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data.reply) return data.reply;
+    // Se /api/chat dice "API key non configurata" e siamo in preview, prova window.claude
+    if (window.claude && window.claude.complete) {
+      return await window.claude.complete({
+        messages: [
+          { role: 'user', content: system },
+          { role: 'assistant', content: 'Perfetto, sono il tuo coach. Dimmi pure come ti senti o cosa vuoi sapere.' },
+          ...messages,
+        ],
+      });
+    }
+    throw new Error(data.error || `HTTP ${r.status}`);
+  } catch (err) {
+    // Ultimo fallback: Claude nel preview
+    if (window.claude && window.claude.complete) {
+      return await window.claude.complete({
+        messages: [
+          { role: 'user', content: system },
+          { role: 'assistant', content: 'Perfetto, sono il tuo coach. Dimmi pure come ti senti o cosa vuoi sapere.' },
+          ...messages,
+        ],
+      });
+    }
+    throw err;
+  }
+}
+
+function CoachScreenM({ tweaks, onNav, auth }) {
   const accent = tweaks.accentColor || C.orange;
   const [messages, setMessages] = useState(CHAT_HISTORY);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
-  const [claudeReady, setClaudeReady] = useState(!!(window.claude && window.claude.complete));
+  const [aiReady, setAiReady] = useState(true);
+  const [stravaActs, setStravaActs] = useState(null); // null = loading, [] = nessuna
   const bottomRef = useRef(null);
 
+  // Carica attività Strava reali (storico fino a 200) per dare contesto live al Coach
   useEffect(() => {
-    if (claudeReady) return;
-    let tries = 0;
-    const id = setInterval(() => {
-      if (window.claude && window.claude.complete) {
-        setClaudeReady(true);
-        clearInterval(id);
-      } else if (++tries > 20) {
-        clearInterval(id);
+    let cancelled = false;
+    (async () => {
+      if (!auth) { setStravaActs([]); return; }
+      try {
+        const acts = await fetchActivities(auth, 200);
+        if (!cancelled) setStravaActs(acts || []);
+      } catch (e) {
+        if (!cancelled) setStravaActs([]);
       }
-    }, 250);
-    return () => clearInterval(id);
-  }, [claudeReady]);
+    })();
+    return () => { cancelled = true; };
+  }, [auth]);
+
+  useEffect(() => {
+    setAiReady(true);
+  }, []);
 
   useEffect(() => {
     if (bottomRef.current) {
@@ -265,6 +308,75 @@ function CoachScreenM({ tweaks, onNav }) {
       return { cleanText: text, workout: null };
     }
   };
+
+  // ─── Calcolo metriche LIVE da Strava per il Coach ───────────────────────────
+  const stravaInsights = (() => {
+    if (!stravaActs || stravaActs.length === 0) return null;
+    try {
+      const trainingData = activitiesToTrainingData(stravaActs);
+      if (!trainingData.length) return null;
+      const loadHistory = calculateTrainingLoad(trainingData, 60);
+      const last = loadHistory[loadHistory.length - 1] || { ctl:0, atl:0, tsb:0 };
+      const safe = (v) => Number.isFinite(+v) ? +v : 0;
+      const ctl = safe(last.ctl), atl = safe(last.atl), tsb = safe(last.tsb);
+
+      // Ultimi 14 giorni
+      const now = Date.now();
+      const last14 = trainingData.filter(a => {
+        const t = new Date(a.date).getTime();
+        return Number.isFinite(t) && (now - t) <= 14 * 86400000;
+      });
+      const km14 = last14.reduce((s,a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
+
+      // Ultime 4 settimane medie
+      const last28 = trainingData.filter(a => {
+        const t = new Date(a.date).getTime();
+        return Number.isFinite(t) && (now - t) <= 28 * 86400000;
+      });
+      const km28 = last28.reduce((s,a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
+      const avgWeeklyKm = +(km28 / 4).toFixed(1);
+
+      // Ultime 5 corse riassunte
+      const recent = trainingData.slice(-5).reverse().map(a => {
+        const d = new Date(a.date);
+        const dStr = Number.isFinite(d.getTime())
+          ? `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`
+          : '—';
+        const km = Number.isFinite(+a.distance_km) ? +a.distance_km : 0;
+        const pace = a.avg_pace_sec_km
+          ? `${Math.floor(a.avg_pace_sec_km/60)}:${String(Math.round(a.avg_pace_sec_km%60)).padStart(2,'0')}/km`
+          : '—';
+        const hr = a.avg_hr ? `${Math.round(a.avg_hr)}bpm` : '';
+        const tss = Number.isFinite(+a.tss) ? `TSS ${Math.round(a.tss)}` : '';
+        return `- ${dStr}: ${km.toFixed(1)}km @ ${pace}${hr ? ' · FC ' + hr : ''}${tss ? ' · ' + tss : ''} (${a.name || a.type || 'Run'})`;
+      }).join('\n');
+
+      // Lungo più recente (≥ 14km)
+      const longRuns = trainingData.filter(a => Number.isFinite(+a.distance_km) && +a.distance_km >= 14);
+      const lastLong = longRuns[longRuns.length - 1];
+      const lastLongStr = lastLong
+        ? `${(+lastLong.distance_km).toFixed(1)}km @ ${lastLong.avg_pace_sec_km ? Math.floor(lastLong.avg_pace_sec_km/60)+':'+String(Math.round(lastLong.avg_pace_sec_km%60)).padStart(2,'0') : '—'}/km${lastLong.avg_hr ? ' · FC '+Math.round(lastLong.avg_hr)+'bpm' : ''} (${new Date(lastLong.date).toLocaleDateString('it-IT')})`
+        : 'nessuno negli ultimi mesi';
+
+      // Forma
+      const form = tsb > 5 ? 'fresco/scarico'
+                  : tsb > -10 ? 'in equilibrio'
+                  : tsb > -20 ? 'affaticato'
+                  : 'molto affaticato';
+
+      return {
+        ctl, atl, tsb, form,
+        km14: +km14.toFixed(1),
+        avgWeeklyKm,
+        runs28: last28.length,
+        recent,
+        lastLongStr,
+        totalActs: trainingData.length,
+      };
+    } catch (e) {
+      return null;
+    }
+  })();
 
   // Contesto completo passato a Claude
   const buildSystemContext = () => `Agisci come un Running Coach professionista specializzato nella preparazione della mezza maratona, con approccio scientifico, prudente, motivante e altamente personalizzato.
@@ -330,14 +442,22 @@ ${GEL_PLAN.map((g,i) => `${i+1}. ${g.when}: ${g.type} (${g.note})`).join('\n')}
 Idratazione: sempre acqua con ogni gel.
 
 ─── ULTIMO LUNGO SIGNIFICATIVO ──────────────────
-${LONG_RUN_LAST.distance}km in ${LONG_RUN_LAST.time} (${LONG_RUN_LAST.pace}), FC media ${LONG_RUN_LAST.avgHR}.
-Ultimi 3 km in progressione: ${LONG_RUN_LAST.finalKm.join(', ')} — chiusura forte.
+${stravaInsights ? stravaInsights.lastLongStr : `${LONG_RUN_LAST.distance}km in ${LONG_RUN_LAST.time} (${LONG_RUN_LAST.pace}), FC media ${LONG_RUN_LAST.avgHR}.`}
+
+─── DATI STRAVA LIVE (ultimi 60 giorni) ─────────
+${stravaInsights ? `Attività totali importate: ${stravaInsights.totalActs}
+Volume ultimi 14 gg: ${stravaInsights.km14} km
+Media settimanale (4 sett): ${stravaInsights.avgWeeklyKm} km
+Corse ultime 4 settimane: ${stravaInsights.runs28}
+Forma attuale: CTL ${stravaInsights.ctl} · ATL ${stravaInsights.atl} · TSB ${stravaInsights.tsb >= 0 ? '+' : ''}${stravaInsights.tsb} (${stravaInsights.form})
+
+Ultime corse:
+${stravaInsights.recent}` : '⚠ Strava non collegato o nessuna attività disponibile — basa i suggerimenti sui PB e sulle informazioni che l\'utente ti dà.'}
 
 ─── STATO ATTUALE ───────────────────────────────
 Settimana ${USER.currentWeek} di ${USER.weeksTotal} — FASE TAPER/scarico
-Recupero oggi: ${RECOVERY_DATA.score}/100
-Sonno: ${RECOVERY_DATA.sleep}h, HRV ${RECOVERY_DATA.hrv}ms, FC riposo ${RECOVERY_DATA.restingHR}bpm
-Allenamento di oggi: ${TODAY_WORKOUT.title} — ${TODAY_WORKOUT.distance}km @ ${TODAY_WORKOUT.targetPace}
+Recupero stimato: ${RECOVERY_DATA.score}/100
+Allenamento di oggi (suggerito dal piano): ${TODAY_WORKOUT.title} — ${TODAY_WORKOUT.distance}km @ ${TODAY_WORKOUT.targetPace}
 Dispositivo: Garmin ${USER.garminDevice}
 
 Rispondi SEMPRE in italiano. Sii coach vero, concreto, sicuro.
@@ -363,12 +483,20 @@ Se l'utente ti chiede un allenamento, o se dai feedback sulle sue sensazioni/dat
 \`\`\`
 
 Regole per generare allenamenti:
-- Coerenti con fase (ora TAPER → niente carichi pesanti)
-- Personalizzati sui dati forniti (sensazioni, stanchezza, recupero)
-- Ritmi compatibili col livello (ritmo facile 6:20-6:45, medio 5:35-5:45, soglia 5:25-5:30)
-- Prima del JSON, scrivi SEMPRE una breve spiegazione (2-4 frasi) del RAZIONALE: perché questo allenamento ora, cosa allena, come dovrebbe sentirsi.
+- Coerenti con la fase attuale del piano (siamo nella settimana ${USER.currentWeek}/${USER.weeksTotal} verso ${race.name})
+- BASATI SUI DATI STRAVA REALI mostrati sopra (CTL/ATL/TSB, ultime corse, ritmi reali, FC reale)
+- Adatta intensità a TSB: se < -15 proponi recupero/easy, se > +5 puoi inserire qualità
+- Se mancano X giorni alla gara (X = ${race.days}), comportati così:
+  • > 21gg: build (volume + qualità mista)
+  • 14-21gg: peak (lavori specifici a ritmo gara)
+  • 7-14gg: pre-taper (qualità ridotta, mantieni stimolo)
+  • ≤ 7gg: taper (solo attivazioni brevi, niente carico)
+- Ritmi compatibili con quelli osservati nelle ultime corse (non inventare ritmi più veloci di quelli che l'atleta corre già)
+- Prima del JSON, scrivi SEMPRE una breve spiegazione (2-4 frasi) del RAZIONALE: "guardando le tue ultime corse... il TSB di X mi dice... quindi oggi ti propongo..."
 - Dopo il JSON, nessun altro testo.
-- Se invece l'utente NON ti chiede un allenamento e non ha senso proporne uno, NON includere il blocco workout.
+
+PIANO SETTIMANALE
+Se l'utente chiede "il piano della settimana" o "cosa devo fare questa settimana", proponi 3 allenamenti distribuiti (es. martedì qualità, giovedì medio, domenica lungo) tenendo conto dei dati Strava degli ultimi 14 giorni. Per ogni giorno inserisci un blocco \`\`\`workout separato.
 
 Ora la persona ti scrive: ascolta e rispondi.`;
 
@@ -378,11 +506,9 @@ Ora la persona ti scrive: ascolta e rispondi.`;
     setMessages(p => [...p, { role:'user', text:text.trim() }]);
     setTyping(true);
 
-    if (useRealAI && (claudeReady || (window.claude && window.claude.complete))) {
+    if (useRealAI) {
       try {
         const systemPrompt = buildSystemContext();
-        // Costruisci la conversazione: contesto come primo user message + finta risposta assistant che "prende il ruolo",
-        // poi storico reale alternato, poi ultimo messaggio utente.
         const history = messages
           .filter(m => m.text && m.text.trim())
           .slice(-10)
@@ -390,10 +516,9 @@ Ora la persona ti scrive: ascolta e rispondi.`;
             role: m.role === 'user' ? 'user' : 'assistant',
             content: m.text,
           }));
-        const reply = await window.claude.complete({
+        const reply = await callCoachAI({
+          system: systemPrompt,
           messages: [
-            { role: 'user', content: systemPrompt },
-            { role: 'assistant', content: 'Perfetto, sono il tuo coach. Dimmi pure come ti senti o cosa vuoi sapere.' },
             ...history,
             { role: 'user', content: text.trim() },
           ],
@@ -403,9 +528,10 @@ Ora la persona ti scrive: ascolta e rispondi.`;
         setMessages(p => [...p, { role:'coach', text: parsed.cleanText || 'Ecco il tuo allenamento:', workout: parsed.workout }]);
         return;
       } catch (err) {
-        console.error('Claude AI error', err);
+        console.error('Coach AI error', err);
         setTyping(false);
-        setMessages(p => [...p, { role:'coach', text:'Problema nella connessione con l\'AI. Riprova tra un attimo.' }]);
+        const msg = (err && err.message) ? err.message : 'errore sconosciuto';
+        setMessages(p => [...p, { role:'coach', text:'Problema nella connessione con l\'AI (' + msg + '). Riprova tra un attimo.' }]);
         return;
       }
     }
@@ -430,7 +556,16 @@ Ora la persona ti scrive: ascolta e rispondi.`;
           <div style={{ flex:1 }}>
             <div style={{ color:C.text, fontSize:18, fontWeight:700 }}>Coach AI</div>
             <div style={{ color:C.teal, fontSize:12, fontWeight:500 }}>
-              ● Online · {useRealAI && (claudeReady || (window.claude && window.claude.complete)) ? 'Claude AI' : 'Risposte preimpostate'}
+              ● Online · {useRealAI ? 'Gemini AI' : 'Risposte preimpostate'}
+              {stravaActs && stravaActs.length > 0 && (
+                <span style={{ color:C.sub, marginLeft:6 }}>· 📊 {stravaActs.length} corse analizzate</span>
+              )}
+              {stravaActs && stravaActs.length === 0 && auth && (
+                <span style={{ color:'#fb923c', marginLeft:6 }}>· ⚠ no dati Strava</span>
+              )}
+              {stravaActs === null && auth && (
+                <span style={{ color:C.sub, marginLeft:6 }}>· caricamento Strava…</span>
+              )}
             </div>
           </div>
           {onNav && (
@@ -438,7 +573,7 @@ Ora la persona ti scrive: ascolta e rispondi.`;
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
           )}
-          {useRealAI && (claudeReady || (window.claude && window.claude.complete)) && (
+          {useRealAI && (
             <div style={{ background:`${accent}22`, border:`1px solid ${accent}44`, color:accent, fontSize:10, fontWeight:700, padding:'4px 8px', borderRadius:6, letterSpacing:'0.05em' }}>LIVE</div>
           )}
         </div>
@@ -810,8 +945,8 @@ function RaceSettingsScreenM({ tweaks, onChange, onBack }) {
           <div style={{ color:C.faint, fontSize:10, fontWeight:800, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8, padding:'0 4px' }}>Coach AI</div>
           <div style={{ background:C.card2, border:`1px solid ${C.border2}`, borderRadius:14, padding:'14px', display:'flex', alignItems:'center', gap:12 }}>
             <div style={{ flex:1 }}>
-              <div style={{ color:C.text, fontSize:14, fontWeight:600 }}>Claude AI reale</div>
-              <div style={{ color:C.sub, fontSize:12, marginTop:2 }}>Risposte generate in tempo reale con i tuoi dati</div>
+              <div style={{ color:C.text, fontSize:14, fontWeight:600 }}>Coach AI (Gemini)</div>
+              <div style={{ color:C.sub, fontSize:12, marginTop:2 }}>Risposte generate in tempo reale con i tuoi dati Strava</div>
             </div>
             <button
               onClick={() => onChange('claudeAI', tweaks.claudeAI === false)}

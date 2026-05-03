@@ -463,11 +463,12 @@ const CHAT_HISTORY = [
 ];
 
 const SUGGESTIONS = [
+  "Pianifica i miei allenamenti della prossima settimana",
+  "Analizza le mie ultime corse Strava",
   "Dammi un allenamento per oggi",
-  "Sono stanca, propongo qualcosa di più leggero",
-  "Che tempo posso fare a Lucca?",
-  "Come gestisco il ritmo in gara?",
-  "Come arrivo riposata il 3 maggio?",
+  "Come sono le mie metriche (CTL/ATL/TSB)?",
+  "Sono stanco, propongo qualcosa di più leggero",
+  "Che obiettivo posso pormi adesso?",
 ];
 
 const COACH_RESPONSES = {
