@@ -108,22 +108,6 @@
 <script type="text/babel" src="js/chart-components.jsx?v=20260503e"></script>
 <script type="text/babel" src="js/coach-engine.jsx?v=20260503e"></script>
 <script type="text/babel" src="js/strava.jsx?v=20260503e"></script>
-<script>
-// Carica config Garmin (client_id pubblico) prima di garmin-auth.jsx
-(async () => {
-  try {
-    const r = await fetch('/api/garmin/config');
-    if (r.ok) {
-      const cfg = await r.json();
-      window.GARMIN_CLIENT_ID = cfg.client_id || '';
-      window.GARMIN_REDIRECT_URI = cfg.redirect_uri || '';
-    }
-  } catch(e) { /* offline / endpoint non disponibile in locale */ }
-})();
-</script>
-<script type="text/babel" src="js/garmin-auth.jsx?v=20260505b"></script>
-<script type="text/babel" src="js/garmin-service.jsx?v=20260505b"></script>
-<script type="text/babel" src="js/garmin-login-button.jsx?v=20260505b"></script>
 <script type="text/babel" src="js/home-mobile.jsx?v=20260503e"></script>
 <script type="text/babel" src="js/home-v2.jsx?v=20260503e"></script>
 <script type="text/babel" src="js/progress-v2.jsx?v=20260503e"></script>

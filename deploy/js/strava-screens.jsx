@@ -31,13 +31,6 @@ function StravaLoginScreen({ onSetup }) {
         Connetti con Strava
       </button>
 
-      {/* Garmin button */}
-      {window.GarminLoginButton && (
-        <div style={{ width:'100%', marginBottom:14 }}>
-          <GarminLoginButton onConnected={() => window.location.reload()} />
-        </div>
-      )}
-
       {/* Manual token setup */}
       <button onClick={onSetup} style={{
         width:'100%', height:48, background:'rgba(255,255,255,0.06)', border:`1px solid ${C.border2}`,
