@@ -135,8 +135,15 @@ function getGarminBackend() {
   };
 }
 
+function normalizeBackendUrl(url) {
+  let u = (url || '').trim().replace(/\/+$/, '');
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return u;
+}
+
 function saveGarminBackend(url, email) {
-  localStorage.setItem('garmin_backend_url',   (url||'').replace(/\/+$/,''));
+  localStorage.setItem('garmin_backend_url',   normalizeBackendUrl(url));
   localStorage.setItem('garmin_backend_email', email||'');
 }
 
@@ -202,16 +209,28 @@ async function pushToGarminConnect(workout, scheduleDate) {
 }
 
 async function loginGarminBackend(url, email, password, mfaCode) {
-  const u = (url||'').replace(/\/+$/,'');
+  const u = normalizeBackendUrl(url);
   const res = await fetch(`${u}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, mfa_code: mfaCode || null }),
+    body: JSON.stringify({ email, password, mfa: mfaCode || null }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(data.detail || `HTTP ${res.status}`);
-    err.code = data.detail === 'mfa_required' ? 'MFA' : 'AUTH';
+    // detail può essere stringa o oggetto {code, message}
+    const d = data.detail;
+    const msg = typeof d === 'string' ? d
+              : (d && d.message) ? d.message
+              : `HTTP ${res.status}`;
+    const code = (d && d.code) || (msg.toLowerCase().includes('mfa') ? 'MFA' : 'AUTH');
+    const err = new Error(msg);
+    err.code = code;
+    throw err;
+  }
+  // 202 needs MFA
+  if (res.status === 202 || data.needs_mfa) {
+    const err = new Error('MFA richiesta');
+    err.code = 'MFA';
     throw err;
   }
   saveGarminBackend(u, email);
