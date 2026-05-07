@@ -41,7 +41,20 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
   const avgWeekly = useMemoH2(() => computeWeeklyAverage(trainingData, 4), [trainingData]);
 
   // Workout di oggi (relativo alla gara)
-  const todayWorkout = useMemoH2(() => generateTodayWorkout(loadHistory, USER.raceDateISO || USER.raceDate), [loadHistory]);
+  const computedPBsH2 = useMemoH2(() => computePBsFromActivities(activities, null), [activities]);
+  const pbsForWorkout = useMemoH2(() => {
+    const out = {};
+    const meters = { '5k': 5000, '10k': 10000, '21k': 21097 };
+    for (const k of Object.keys(meters)) {
+      const pb = computedPBsH2?.[k];
+      if (pb && pb.seconds && pb.fromStrava) out[k] = { distanceMeters: meters[k], seconds: pb.seconds };
+    }
+    return out;
+  }, [computedPBsH2]);
+  const todayWorkout = useMemoH2(
+    () => generateTodayWorkout(loadHistory, USER.raceDateISO || USER.raceDate, { pbs: pbsForWorkout, trainingData }),
+    [loadHistory, pbsForWorkout, trainingData]
+  );
 
   // ─── Ricalibrazione piano automatica ───────────────────────────────────────
   // Carica il piano precedente da localStorage, ricalibra, salva il nuovo
@@ -358,6 +371,11 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
       {/* Workout di oggi */}
       <div style={{ padding: '0 14px 14px' }}>
         <SectionHeader kicker="OGGI" title="Allenamento" color={NEON.orange}/>
+        {todayWorkout?.why && (
+          <div style={{ color: NEON.textFaint, fontSize: 10, marginBottom: 8, fontStyle:'italic' }}>
+            ⓘ {todayWorkout.why}
+          </div>
+        )}
         <div onClick={() => onNav('workout', todayWorkout)} style={{
           background: `linear-gradient(135deg, ${NEON.orange}18 0%, ${NEON.bg2} 70%)`,
           border: `1px solid ${NEON.orange}33`,
