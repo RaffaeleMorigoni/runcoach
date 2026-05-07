@@ -1,479 +1,549 @@
-// js/garmin-workout.jsx — Garmin Workout Builder + TCX Export + API Push
-const { useState, useRef } = React;
+// js/home-v2.jsx — Home neon: countdown cinematografico + anelli forma + big PB
+const { useState: useStateH2, useEffect: useEffectH2, useMemo: useMemoH2 } = React;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function paceToMs(paceStr) {
-  // "6:00" → m/s
-  const [m, s] = paceStr.split(':').map(Number);
-  const secPerKm = m * 60 + (s || 0);
-  return secPerKm > 0 ? 1000 / secPerKm : 2.5;
-}
+function HomeV2({ auth, onNav, tweaks, onLogout }) {
+  const [activities, setActivities] = useStateH2([]);
+  const [athlete, setAthlete] = useStateH2(null);
+  const [loading, setLoading] = useStateH2(true);
 
-function parsePaceRange(rangeStr) {
-  // "5:15–5:25 /km" → { low, high } m/s
-  const clean = rangeStr.replace(/\s/g,'').replace('/km','');
-  const parts = clean.split(/[–-]/);
-  if (parts.length === 2) {
-    const hi = paceToMs(parts[0]); // slower pace = lower speed
-    const lo = paceToMs(parts[1]); // faster pace = higher speed
-    return { low: Math.min(lo, hi), high: Math.max(lo, hi) };
-  }
-  const v = paceToMs(parts[0]);
-  return { low: v * 0.95, high: v * 1.05 };
-}
+  useEffectH2(() => {
+    (async () => {
+      try {
+        if (auth) {
+          // Carica fino a 200 attività (massimo Strava per page) per avere lo storico completo.
+          const [acts, ath] = await Promise.all([
+            fetchActivities(auth, 200),
+            fetchAthlete(auth).catch(() => null),
+          ]);
+          setActivities(acts);
+          setAthlete(ath);
+        }
+      } catch (e) {}
+      finally { setLoading(false); }
+    })();
+  }, [auth]);
 
-// ─── TCX Generator ────────────────────────────────────────────────────────────
-function generateTCX(workout) {
-  const steps = workout.steps.map((step, i) => {
-    const durType = step.durationType === 'time' ? 'Time_t' : 'Distance_t';
-    const durTag  = step.durationType === 'time'
-      ? `<Seconds>${step.durationValue}</Seconds>`
-      : `<Meters>${step.durationValue}</Meters>`;
-    const intensity = step.type === 'warmup'   ? 'Warmup'
-                    : step.type === 'cooldown' ? 'Cooldown'
-                    : step.type === 'rest'     ? 'Rest'
-                    : 'Active';
+  const trainingData = useMemoH2(() => activitiesToTrainingData(activities), [activities]);
+  const loadHistory  = useMemoH2(() => calculateTrainingLoad(trainingData, 30), [trainingData]);
+  const last         = loadHistory[loadHistory.length - 1] || { ctl: 0, atl: 0, tsb: 0 };
+  // Safe: garantisce che ctl/atl/tsb siano numeri finiti (evita NaN in UI)
+  const safeNum = (v, d = 0) => Number.isFinite(+v) ? +v : d;
+  const ctlVal  = safeNum(last.ctl);
+  const atlVal  = safeNum(last.atl);
+  const tsbVal  = safeNum(last.tsb);
+  const overTr       = useMemoH2(() => detectOvertraining(loadHistory, trainingData.slice(-7)), [loadHistory, trainingData]);
+  const form         = getFormLabel(tsbVal);
 
-    let targetXml = '        <Target xsi:type="None_t"/>';
-    if (step.targetType === 'pace' && step.paceRange) {
-      const { low, high } = parsePaceRange(step.paceRange);
-      targetXml = `        <Target xsi:type="Speed_t">
-          <SpeedZone xsi:type="CustomSpeedZone_t">
-            <LowInMetersPerSecond>${low.toFixed(4)}</LowInMetersPerSecond>
-            <HighInMetersPerSecond>${high.toFixed(4)}</HighInMetersPerSecond>
-          </SpeedZone>
-        </Target>`;
-    } else if (step.targetType === 'hr' && step.hrRange) {
-      targetXml = `        <Target xsi:type="HeartRate_t">
-          <HeartRateZone xsi:type="CustomHeartRateZone_t">
-            <Low xsi:type="HeartRateInBeatsPerMinute_t"><Value>${step.hrRange[0]}</Value></Low>
-            <High xsi:type="HeartRateInBeatsPerMinute_t"><Value>${step.hrRange[1]}</Value></High>
-          </HeartRateZone>
-        </Target>`;
+  // PB calcolati dalle attività Strava (fallback ai PB hardcoded)
+  const pbs = useMemoH2(() => computePBsFromActivities(activities, PB), [activities]);
+
+  // Volume settimanale medio dalle attività (fallback al tweak/USER)
+  const avgWeekly = useMemoH2(() => computeWeeklyAverage(trainingData, 4), [trainingData]);
+
+  // Workout di oggi (relativo alla gara)
+  const computedPBsH2 = useMemoH2(() => computePBsFromActivities(activities, null), [activities]);
+  const pbsForWorkout = useMemoH2(() => {
+    const out = {};
+    const meters = { '5k': 5000, '10k': 10000, '21k': 21097 };
+    for (const k of Object.keys(meters)) {
+      const pb = computedPBsH2?.[k];
+      if (pb && pb.seconds && pb.fromStrava) out[k] = { distanceMeters: meters[k], seconds: pb.seconds };
     }
+    return out;
+  }, [computedPBsH2]);
+  const todayWorkout = useMemoH2(
+    () => generateTodayWorkout(loadHistory, USER.raceDateISO || USER.raceDate, { pbs: pbsForWorkout, trainingData }),
+    [loadHistory, pbsForWorkout, trainingData]
+  );
 
-    return `      <Step xsi:type="Step_t">
-        <StepId>${i + 1}</StepId>
-        <Name>${step.name}</Name>
-        <Duration xsi:type="${durType}">
-          ${durTag}
-        </Duration>
-        <Intensity>${intensity}</Intensity>
-${targetXml}
-      </Step>`;
-  }).join('\n');
+  // ─── Ricalibrazione piano automatica ───────────────────────────────────────
+  // Carica il piano precedente da localStorage, ricalibra, salva il nuovo
+  const recal = useMemoH2(() => {
+    if (loading || activities.length === 0) return null;
+    let lastPlan = null;
+    try {
+      const raw = localStorage.getItem('rc_lastPlan');
+      if (raw) lastPlan = JSON.parse(raw);
+    } catch(e) {}
+    return recalibratePlan({
+      activities,
+      loadHistory,
+      raceDateStr: USER.raceDateISO || USER.raceDate,
+      lastPlan,
+    });
+  }, [loadHistory, activities, loading]);
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<TrainingCenterDatabase
-  xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2 http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd">
-  <Workouts>
-    <Workout Sport="Running">
-      <Name>${workout.name}</Name>
-${steps}
-    </Workout>
-  </Workouts>
-</TrainingCenterDatabase>`;
-}
+  // Banner dismiss state — persiste su localStorage per timestamp del recalc
+  const recalKey = recal?.timestamp?.slice(0, 10) || '';
+  const [bannerDismissed, setBannerDismissed] = useStateH2(false);
+  useEffectH2(() => {
+    if (!recalKey) return;
+    const dismissed = localStorage.getItem('rc_recalDismissed_' + recalKey);
+    setBannerDismissed(!!dismissed);
+  }, [recalKey]);
 
-// ─── Garmin Connect API (unofficial, requires login) ─────────────────────────
-function workoutToGarminJSON(workout) {
-  const STEP_TYPES = {
-    warmup:   { stepTypeId: 1, stepTypeKey: 'warmup' },
-    interval: { stepTypeId: 3, stepTypeKey: 'interval' },
-    recovery: { stepTypeId: 4, stepTypeKey: 'recovery' },
-    cooldown: { stepTypeId: 2, stepTypeKey: 'cooldown' },
-    rest:     { stepTypeId: 5, stepTypeKey: 'rest' },
+  // Salva il piano corrente per confronto al prossimo refresh
+  useEffectH2(() => {
+    if (recal?.plan) {
+      try {
+        localStorage.setItem('rc_lastPlan', JSON.stringify(recal.plan.map(d => ({
+          date: d.date, workout: d.workout
+        }))));
+      } catch(e) {}
+    }
+  }, [recal?.timestamp]);
+
+  const showBanner = recal && recal.changes.length > 0 && !bannerDismissed;
+  const dismissBanner = () => {
+    if (recalKey) localStorage.setItem('rc_recalDismissed_' + recalKey, '1');
+    setBannerDismissed(true);
   };
 
-  const steps = workout.steps.map((step, i) => {
-    const endCond = step.durationType === 'time'
-      ? { conditionTypeId: 2, conditionTypeKey: 'time', conditionValue: step.durationValue, displayOrder: 1 }
-      : { conditionTypeId: 3, conditionTypeKey: 'distance', conditionValue: step.durationValue, displayOrder: 1 };
-
-    let target = { workoutTargetTypeId: 1, workoutTargetTypeKey: 'no.target' };
-    let targetValueOne = null, targetValueTwo = null;
-    if (step.targetType === 'pace' && step.paceRange) {
-      const { low, high } = parsePaceRange(step.paceRange);
-      target = { workoutTargetTypeId: 6, workoutTargetTypeKey: 'pace.zone' };
-      targetValueOne  = low;
-      targetValueTwo  = high;
-    } else if (step.targetType === 'hr' && step.hrRange) {
-      target = { workoutTargetTypeId: 4, workoutTargetTypeKey: 'heart.rate.zone' };
-      targetValueOne  = step.hrRange[0];
-      targetValueTwo  = step.hrRange[1];
+  // Race countdown — usa raceDateISO (parsabile), fallback su USER.daysToRace
+  const daysToRace = useMemoH2(() => {
+    const iso = USER.raceDateISO || (typeof USER.raceDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(USER.raceDate) ? USER.raceDate : null);
+    if (iso) {
+      const race = new Date(iso + 'T12:00:00');
+      const now = new Date();
+      const d = Math.ceil((race - now) / 86400000);
+      if (Number.isFinite(d)) return Math.max(0, d);
     }
+    return Number.isFinite(USER.daysToRace) ? USER.daysToRace : 0;
+  }, []);
 
+  // Settimana km progress (target = media reale ultime 4 sett, fallback a tweak)
+  const weekStats = useMemoH2(() => {
+    const now = new Date();
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    monday.setHours(0,0,0,0);
+    const weekActs = trainingData.filter(a => {
+      const d = new Date(a.date);
+      return Number.isFinite(d.getTime()) && d >= monday;
+    });
+    const kmDoneRaw = weekActs.reduce((s, a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
+    const kmDone = Number.isFinite(kmDoneRaw) ? kmDoneRaw : 0;
+    const avg = Number.isFinite(+avgWeekly?.avgKm) ? +avgWeekly.avgKm : 0;
+    const target = avg > 0 ? Math.round(avg) : (Number.isFinite(+tweaks?.weeklyKm) ? +tweaks.weeklyKm : 25);
     return {
-      stepId: null, stepOrder: i + 1,
-      stepType: STEP_TYPES[step.type] || STEP_TYPES.interval,
-      endCondition: endCond,
-      endConditionValue: step.durationValue,
-      targetType: target, targetValueOne, targetValueTwo,
-      description: step.name,
+      kmDone,
+      kmTarget: target,
+      runs: weekActs.length,
+      isAvg: avg > 0,
     };
-  });
+  }, [trainingData, avgWeekly, tweaks.weeklyKm]);
 
-  return {
-    workoutName: workout.name,
-    description: workout.notes || 'Creato con RunCoach AI',
-    sportType: { sportTypeId: 1, sportTypeKey: 'running' },
-    workoutSegments: [{
-      segmentOrder: 1,
-      sportType: { sportTypeId: 1, sportTypeKey: 'running' },
-      workoutSteps: steps,
-    }],
-  };
-}
+  // Nome: Strava firstname > tweak > USER fallback
+  const userName = athlete?.firstname || tweaks.userName || USER.name;
+  const today = new Date();
+  const dayLabel = today.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
 
-async function pushToGarminConnect(workout) {
-  const body = workoutToGarminJSON(workout);
-  const res = await fetch('https://connect.garmin.com/workout-service/workout', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'NK': 'NT' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
+  const noData = !loading && activities.length === 0;
 
-function downloadTCX(workout) {
-  const xml = generateTCX(workout);
-  const blob = new Blob([xml], { type: 'application/vnd.garmin.tcx+xml' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `${workout.name.replace(/\s+/g,'-')}.tcx`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ─── Preset workouts from plan ────────────────────────────────────────────────
-const PRESET_WORKOUTS = [
-  {
-    id: 'easy_taper',
-    name: 'Corsa Facile 6km — Scarico',
-    notes: 'Settimana taper pre-Maratona di Lucca. Ritmo conversazionale.',
-    steps: [
-      { name: 'Riscaldamento',   type: 'warmup',   durationType: 'time', durationValue: 300,  targetType: 'pace', paceRange: '6:45–7:15 /km' },
-      { name: 'Corsa facile',    type: 'interval', durationType: 'time', durationValue: 1800, targetType: 'pace', paceRange: '6:00–6:30 /km' },
-      { name: 'Defaticamento',   type: 'cooldown', durationType: 'time', durationValue: 300,  targetType: 'none' },
-    ],
-  },
-  {
-    id: 'activation',
-    name: 'Attivazione pre-gara 5km',
-    notes: 'Uscita leggera 2 giorni prima della Maratona di Lucca.',
-    steps: [
-      { name: 'Jogging leggero', type: 'warmup',   durationType: 'time', durationValue: 600,  targetType: 'pace', paceRange: '6:45–7:15 /km' },
-      { name: 'Ritmo facile',    type: 'interval', durationType: 'time', durationValue: 1200, targetType: 'pace', paceRange: '6:10–6:40 /km' },
-      { name: 'Defaticamento',   type: 'cooldown', durationType: 'time', durationValue: 300,  targetType: 'none' },
-    ],
-  },
-  {
-    id: 'long_taper',
-    name: 'Ultimo Lungo 14km',
-    notes: 'Ultimo lungo di taper. No eroismo — ritmo facile tutto il tempo.',
-    steps: [
-      { name: 'Riscaldamento',   type: 'warmup',   durationType: 'distance', durationValue: 1000, targetType: 'pace', paceRange: '6:45–7:15 /km' },
-      { name: 'Lungo facile',    type: 'interval', durationType: 'distance', durationValue: 11500,targetType: 'pace', paceRange: '6:00–6:30 /km' },
-      { name: 'Defaticamento',   type: 'cooldown', durationType: 'distance', durationValue: 1500, targetType: 'pace', paceRange: '6:30–7:00 /km' },
-    ],
-  },
-  {
-    id: 'race_warmup',
-    name: 'Riscaldamento Gara — Lucca 3 Maggio',
-    notes: 'Routine pre-gara da fare 45-60 min prima della partenza.',
-    steps: [
-      { name: 'Cammino veloce',  type: 'warmup',   durationType: 'time', durationValue: 300,  targetType: 'none' },
-      { name: 'Jogging leggero', type: 'interval', durationType: 'time', durationValue: 600,  targetType: 'pace', paceRange: '6:45–7:15 /km' },
-      { name: '4 allunghi 80m',  type: 'interval', durationType: 'time', durationValue: 480,  targetType: 'none' },
-      { name: 'Recupero',        type: 'cooldown', durationType: 'time', durationValue: 300,  targetType: 'none' },
-    ],
-  },
-];
-
-// ─── Step Editor ──────────────────────────────────────────────────────────────
-function StepRow({ step, index, onUpdate, onRemove, accent }) {
-  const types = [
-    { key:'warmup',   label:'Riscaldamento', col: C.teal },
-    { key:'interval', label:'Principale',    col: accent },
-    { key:'cooldown', label:'Defaticamento', col: C.teal },
-    { key:'recovery', label:'Recupero',      col: C.blue },
-  ];
-  const t = types.find(t => t.key === step.type) || types[1];
+  if (loading) {
+    return (
+      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:12 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 18, border: `3px solid ${NEON.orange}`, borderTopColor: 'transparent', animation: 'spinH2 0.8s linear infinite' }}/>
+        <div style={{ color: NEON.textDim, fontSize: 12 }}>Caricamento dati Strava…</div>
+        <style>{`@keyframes spinH2{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ background: C.card2, border:`1px solid ${C.border}`, borderRadius:14, padding:'12px 14px', marginBottom:8 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-        <div style={{ display:'flex', gap:6 }}>
-          {types.map(tp => (
-            <button key={tp.key} onClick={() => onUpdate({ ...step, type: tp.key })} style={{
-              padding:'3px 10px', borderRadius:6, border:'none', cursor:'pointer', fontSize:10, fontWeight:600,
-              background: step.type === tp.key ? `${tp.col}33` : 'rgba(255,255,255,0.06)',
-              color: step.type === tp.key ? tp.col : C.faint,
-            }}>{tp.label}</button>
-          ))}
-        </div>
-        <button onClick={onRemove} style={{ background:'none', border:'none', color:C.faint, fontSize:18, cursor:'pointer', padding:'0 4px' }}>×</button>
-      </div>
-
-      {/* Name */}
-      <input value={step.name} onChange={e => onUpdate({ ...step, name: e.target.value })}
-        placeholder="Nome del passo"
-        style={{ width:'100%', background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 10px', color:C.text, fontSize:13, outline:'none', marginBottom:8, fontFamily:'DM Sans,sans-serif' }}/>
-
-      {/* Duration */}
-      <div style={{ display:'flex', gap:6, marginBottom:8 }}>
-        <select value={step.durationType} onChange={e => onUpdate({ ...step, durationType: e.target.value })}
-          style={{ flex:1, background:C.card2, border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 8px', color:C.text, fontSize:12, outline:'none' }}>
-          <option value="time">Tempo (sec)</option>
-          <option value="distance">Distanza (m)</option>
-        </select>
-        <input type="number" value={step.durationValue}
-          onChange={e => onUpdate({ ...step, durationValue: +e.target.value })}
-          style={{ flex:1, background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 10px', color:C.text, fontSize:13, outline:'none', textAlign:'center', fontFamily:'DM Sans,sans-serif' }}/>
-        <div style={{ display:'flex', alignItems:'center', color:C.faint, fontSize:11, minWidth:30 }}>
-          {step.durationType === 'time' ? 'sec' : 'm'}
-        </div>
-      </div>
-
-      {/* Target */}
-      <div style={{ display:'flex', gap:6 }}>
-        <select value={step.targetType} onChange={e => onUpdate({ ...step, targetType: e.target.value })}
-          style={{ flex:1, background:C.card2, border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 8px', color:C.text, fontSize:12, outline:'none' }}>
-          <option value="none">Nessun target</option>
-          <option value="pace">Ritmo /km</option>
-          <option value="hr">Frequenza cardiaca</option>
-        </select>
-        {step.targetType === 'pace' && (
-          <input value={step.paceRange || ''} onChange={e => onUpdate({ ...step, paceRange: e.target.value })}
-            placeholder="es. 6:00–6:30 /km"
-            style={{ flex:2, background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 10px', color:C.text, fontSize:12, outline:'none', fontFamily:'DM Sans,sans-serif' }}/>
-        )}
-        {step.targetType === 'hr' && (
-          <input value={(step.hrRange||[140,155]).join('–')} onChange={e => {
-            const parts = e.target.value.split('–').map(Number);
-            onUpdate({ ...step, hrRange: parts.length===2 ? parts : [140,155] });
-          }} placeholder="140–155 bpm"
-            style={{ flex:2, background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 10px', color:C.text, fontSize:12, outline:'none', fontFamily:'DM Sans,sans-serif' }}/>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Builder Screen ──────────────────────────────────────────────────────
-function GarminBuilderScreen({ onBack, tweaks }) {
-  const accent = tweaks.accentColor || C.orange;
-  const [mode, setMode]           = useState('presets'); // presets | build
-  const [workout, setWorkout]     = useState(null);
-  const [pushing, setPushing]     = useState(false);
-  const [pushResult, setPushResult] = useState(null); // null | 'ok' | 'error' | 'downloaded'
-  const [showSuccess, setShowSuccess] = useState(false);
-
-  const selectPreset = (p) => {
-    setWorkout(JSON.parse(JSON.stringify(p))); // deep copy
-    setMode('build');
-    setPushResult(null);
-  };
-
-  const newBlank = () => {
-    setWorkout({
-      name: 'Il mio allenamento',
-      notes: '',
-      steps: [
-        { name: 'Riscaldamento', type: 'warmup',   durationType:'time', durationValue:600,  targetType:'pace', paceRange:'6:45–7:15 /km' },
-        { name: 'Corsa',         type: 'interval', durationType:'time', durationValue:1800, targetType:'pace', paceRange:'6:00–6:30 /km' },
-        { name: 'Defaticamento', type: 'cooldown', durationType:'time', durationValue:300,  targetType:'none' },
-      ],
-    });
-    setMode('build');
-    setPushResult(null);
-  };
-
-  const updateStep = (i, step) => {
-    const steps = [...workout.steps];
-    steps[i] = step;
-    setWorkout({ ...workout, steps });
-  };
-
-  const removeStep = (i) => {
-    const steps = workout.steps.filter((_,idx) => idx !== i);
-    setWorkout({ ...workout, steps });
-  };
-
-  const addStep = () => {
-    setWorkout({ ...workout, steps: [...workout.steps, {
-      name: 'Nuovo passo', type: 'interval', durationType:'time', durationValue:600, targetType:'none',
-    }]});
-  };
-
-  const totalDuration = (w) => {
-    const secs = w.steps.filter(s => s.durationType === 'time').reduce((a,b) => a + (b.durationValue||0), 0);
-    const m = Math.floor(secs/60); return m > 0 ? `~${m} min` : '';
-  };
-
-  const handlePush = async () => {
-    setPushing(true);
-    setPushResult(null);
-    try {
-      await pushToGarminConnect(workout);
-      setPushResult('ok');
-    } catch(e) {
-      // fallback to download
-      setPushResult('error');
-    }
-    setPushing(false);
-  };
-
-  const handleDownload = () => {
-    downloadTCX(workout);
-    setPushResult('downloaded');
-  };
-
-  // ── Presets view ──
-  if (mode === 'presets') return (
     <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 16px 14px' }}>
-        <button onClick={onBack} style={{ width:44, height:44, borderRadius:22, background:'rgba(255,255,255,0.07)', border:`1px solid ${C.border}`, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke={C.text} strokeWidth="2" strokeLinecap="round"/></svg>
-        </button>
+      {/* Greeting */}
+      <div style={{ padding: '14px 18px 12px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
         <div>
-          <div style={{ color:C.text, fontSize:20, fontWeight:700, letterSpacing:'-0.3px' }}>Allenamenti Garmin</div>
-          <div style={{ color:C.sub, fontSize:12, marginTop:2 }}>Crea e invia al tuo dispositivo</div>
-        </div>
-      </div>
-
-      {/* Garmin chip */}
-      <div style={{ padding:'0 16px 16px' }}>
-        <div style={{ background: C.blueDim, border:`1px solid ${C.blue}33`, borderRadius:14, padding:'12px 14px', display:'flex', alignItems:'center', gap:10 }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke={C.blue} strokeWidth="1.8" strokeLinejoin="round"/></svg>
-          <div>
-            <div style={{ color:C.blue, fontSize:13, fontWeight:600 }}>Garmin Connect · {USER.garminDevice}</div>
-            <div style={{ color:C.sub, fontSize:11, marginTop:2 }}>Esporta allenamenti strutturati (.tcx) o invia direttamente</div>
+          <div style={{ color: NEON.textDim, fontSize: 11, textTransform: 'capitalize' }}>{dayLabel}</div>
+          <div style={{ color: NEON.text, fontSize: 24, fontWeight: 800, letterSpacing: '-0.025em', lineHeight: 1.1, marginTop: 2 }}>
+            Ciao, {userName}<span style={{ color: NEON.orange }}>.</span>
           </div>
         </div>
+        <div onClick={onLogout} style={{
+          width: 38, height: 38, borderRadius: 19,
+          background: athlete?.profile ? `url(${athlete.profile}) center/cover` : `linear-gradient(135deg, ${NEON.orange}, ${NEON.purple})`,
+          border: `1.5px solid ${NEON.orange}40`,
+          display:'flex', alignItems:'center', justifyContent:'center',
+          cursor: 'pointer',
+        }}>
+          {!athlete?.profile && <span style={{ color:'white', fontSize:14, fontWeight:800 }}>{userName[0]}</span>}
+        </div>
       </div>
 
-      {/* Presets */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:12 }}>Allenamenti del Piano</div>
-        {PRESET_WORKOUTS.map(p => (
-          <Card key={p.id} onClick={() => selectPreset(p)} style={{ marginBottom:10 }}>
-            <div style={{ padding:'14px 16px' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
-                <div style={{ color:C.text, fontSize:14, fontWeight:600, flex:1 }}>{p.name}</div>
-                <div style={{ background:`${accent}22`, borderRadius:8, padding:'3px 8px', marginLeft:8, flexShrink:0 }}>
-                  <span style={{ color:accent, fontSize:10, fontWeight:700 }}>{p.steps.length} passi</span>
+      {/* Banner ricalibrazione piano */}
+      {showBanner && (
+        <div style={{ padding: '0 14px 12px' }}>
+          <div style={{
+            position: 'relative',
+            borderRadius: 16,
+            padding: '14px 14px 14px 14px',
+            background: recal.severity === 'critical'
+              ? `linear-gradient(135deg, rgba(255,68,34,0.18), rgba(255,68,34,0.06))`
+              : recal.severity === 'warn'
+              ? `linear-gradient(135deg, rgba(255,170,0,0.18), rgba(255,170,0,0.06))`
+              : `linear-gradient(135deg, rgba(0,200,255,0.16), rgba(0,200,255,0.05))`,
+            border: `1px solid ${recal.severity === 'critical' ? '#ff442255' : recal.severity === 'warn' ? '#ffaa0055' : '#00c8ff44'}`,
+            boxShadow: recal.severity === 'critical' ? '0 0 24px rgba(255,68,34,0.25)' : 'none',
+          }}>
+            <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 10,
+                background: recal.severity === 'critical' ? '#ff4422' : recal.severity === 'warn' ? '#ffaa00' : '#00c8ff',
+                display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0,
+                fontSize: 16,
+              }}>{recal.severity === 'critical' ? '⚠' : recal.severity === 'warn' ? '⟳' : '✦'}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: 'white', fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
+                  {recal.summary}
                 </div>
+                {recal.changes.slice(0, 3).map((c, i) => (
+                  <div key={i} style={{ color: NEON.textDim, fontSize: 12, lineHeight: 1.45, marginTop: i === 0 ? 0 : 4 }}>
+                    • {c.reason}
+                  </div>
+                ))}
+                {recal.metrics?.missedCount > 0 && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: NEON.textDim }}>
+                    Settimana scorsa: {recal.metrics.missedCount} sessioni saltate · TSB {Math.round(recal.metrics.tsb)}
+                  </div>
+                )}
               </div>
-              <div style={{ color:C.sub, fontSize:12, marginBottom:10, lineHeight:1.45 }}>{p.notes}</div>
-              {/* Steps preview */}
-              <div style={{ display:'flex', gap:4 }}>
-                {p.steps.map((s,i) => {
-                  const col = s.type==='warmup'||s.type==='cooldown' ? C.teal : s.type==='recovery' ? C.blue : accent;
-                  return (
-                    <div key={i} style={{ flex:1, height:4, borderRadius:2, background:`${col}66` }}/>
-                  );
-                })}
+              <button onClick={dismissBanner} style={{
+                background:'transparent', border:'none', color: NEON.textDim,
+                fontSize: 18, cursor:'pointer', padding: 0, lineHeight: 1, flexShrink: 0,
+              }}>×</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HERO Countdown — cinematografico */}
+      <div style={{ padding: '0 14px 14px' }}>
+        <div style={{
+          position: 'relative', overflow: 'hidden',
+          borderRadius: 22,
+          padding: '20px 18px 18px',
+          background: `linear-gradient(135deg, ${NEON.orange}28 0%, ${NEON.purple}18 50%, #0A0A18 100%)`,
+          border: `1px solid ${NEON.orange}44`,
+          boxShadow: `0 0 30px ${NEON.orange}22, inset 0 1px 0 rgba(255,255,255,0.05)`,
+        }}>
+          {/* Glow orbs */}
+          <div style={{ position:'absolute', top:-30, right:-20, width: 140, height: 140, borderRadius: '50%', background: `radial-gradient(circle, ${NEON.orange}55, transparent 70%)`, filter: 'blur(20px)' }}/>
+          <div style={{ position:'absolute', bottom:-40, left:-20, width: 120, height: 120, borderRadius: '50%', background: `radial-gradient(circle, ${NEON.purple}40, transparent 70%)`, filter: 'blur(24px)' }}/>
+
+          {/* Running figure */}
+          <svg style={{ position:'absolute', right: 8, bottom: 10, opacity: 0.10 }} width="120" height="120" viewBox="0 0 24 24" fill="none">
+            <path d="M13 4C13 5.1 13.9 6 15 6C16.1 6 17 5.1 17 4C17 2.9 16.1 2 15 2C13.9 2 13 2.9 13 4Z" fill={NEON.orange}/>
+            <path d="M5.5 18.5L8 13L11 16L13 10L16.5 18.5" stroke={NEON.orange} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+          </svg>
+
+          <div style={{ position: 'relative' }}>
+            <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 4 }}>
+              <div style={{ width: 6, height: 6, borderRadius: 3, background: NEON.orange, boxShadow: `0 0 8px ${NEON.orange}` }}/>
+              <span style={{ color: NEON.orange, fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' }}>PROSSIMA GARA</span>
+            </div>
+            <div style={{ color: NEON.text, fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.15 }}>{USER.raceName}</div>
+            <div style={{ color: NEON.textDim, fontSize: 11.5, marginTop: 2 }}>{USER.raceDate} · 21.097 km</div>
+
+            {/* Big countdown */}
+            <div style={{ marginTop: 16, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <BigNumber
+                value={daysToRace}
+                size={72}
+                weight={900}
+                color={NEON.orange}
+                animate={false}
+              />
+              <div>
+                <div style={{ color: NEON.text, fontSize: 14, fontWeight: 700, lineHeight: 1 }}>giorni</div>
+                <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 2 }}>al via</div>
+              </div>
+              <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+                <div style={{ color: NEON.textFaint, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em' }}>TARGET</div>
+                <div style={{ color: NEON.text, fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>{USER.raceTargetTime}</div>
+                <div style={{ color: NEON.textDim, fontSize: 10 }}>{USER.raceTargetPace}</div>
               </div>
             </div>
-          </Card>
-        ))}
-      </div>
-
-      {/* Custom */}
-      <div style={{ padding:'0 16px 28px' }}>
-        <button onClick={newBlank} style={{ width:'100%', height:50, background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border2}`, borderRadius:14, color:C.sub, fontSize:14, fontWeight:500, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
-          <span style={{ fontSize:18 }}>＋</span> Crea allenamento personalizzato
-        </button>
-      </div>
-    </div>
-  );
-
-  // ── Builder view ──
-  return (
-    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
-      {/* Header */}
-      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 16px 14px' }}>
-        <button onClick={() => { setMode('presets'); setPushResult(null); }} style={{ width:44, height:44, borderRadius:22, background:'rgba(255,255,255,0.07)', border:`1px solid ${C.border}`, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke={C.text} strokeWidth="2" strokeLinecap="round"/></svg>
-        </button>
-        <div style={{ flex:1 }}>
-          <input value={workout.name} onChange={e => setWorkout({ ...workout, name: e.target.value })}
-            style={{ background:'none', border:'none', color:C.text, fontSize:18, fontWeight:700, letterSpacing:'-0.3px', outline:'none', width:'100%', fontFamily:'DM Sans,sans-serif' }}/>
-          <div style={{ color:C.sub, fontSize:11, marginTop:2 }}>{totalDuration(workout)}</div>
+          </div>
         </div>
       </div>
 
-      {/* Notes */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <input value={workout.notes} onChange={e => setWorkout({ ...workout, notes: e.target.value })}
-          placeholder="Note (opzionale)"
-          style={{ width:'100%', background:C.card2, border:`1px solid ${C.border}`, borderRadius:12, padding:'10px 14px', color:C.sub, fontSize:13, outline:'none', fontFamily:'DM Sans,sans-serif' }}/>
-      </div>
-
-      {/* Steps */}
-      <div style={{ padding:'0 16px 8px' }}>
-        <div style={{ color:C.text, fontSize:14, fontWeight:600, marginBottom:10 }}>Passi dell'allenamento</div>
-        {workout.steps.map((step, i) => (
-          <StepRow key={i} step={step} index={i} accent={accent}
-            onUpdate={(s) => updateStep(i, s)}
-            onRemove={() => removeStep(i)} />
-        ))}
-        <button onClick={addStep} style={{ width:'100%', height:44, background:'rgba(255,255,255,0.04)', border:`1px dashed ${C.border2}`, borderRadius:12, color:C.sub, fontSize:13, cursor:'pointer', marginTop:4 }}>
-          + Aggiungi passo
-        </button>
-      </div>
-
-      {/* Result feedback */}
-      {pushResult === 'ok' && (
-        <div style={{ margin:'8px 16px', background:C.tealDim, border:`1px solid ${C.teal}44`, borderRadius:14, padding:'14px 16px' }}>
-          <div style={{ color:C.teal, fontSize:14, fontWeight:700, marginBottom:4 }}>✓ Inviato a Garmin Connect!</div>
-          <div style={{ color:C.sub, fontSize:12 }}>Trovi l'allenamento in "Allenamenti" su Garmin Connect e sulla tua {USER.garminDevice}.</div>
+      {/* Tre anelli forma — solo se ci sono dati */}
+      {noData ? (
+        <div style={{ padding: '0 14px 14px' }}>
+          <GlowCard glow={NEON.yellow} intensity={0.1}>
+            <div style={{ display:'flex', alignItems:'center', gap: 12 }}>
+              <div style={{ fontSize: 28 }}>📊</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: NEON.text, fontSize: 13, fontWeight: 700 }}>Nessuna corsa trovata</div>
+                <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 3, lineHeight: 1.4 }}>
+                  CTL/ATL/TSB e PB si calcolano dalle tue attività. Carica almeno una corsa su Strava per vedere i grafici.
+                </div>
+              </div>
+            </div>
+          </GlowCard>
         </div>
+      ) : (
+        <div style={{ padding: '0 14px 14px' }}>
+          <SectionHeader kicker="STATO ATTUALE" title="La tua forma" color={form.color}/>
+        <GlowCard glow={form.color} intensity={0.15}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 8, alignItems:'center' }}>
+            {/* Fitness ring */}
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap: 6 }}>
+              <AnimatedRing
+                size={86}
+                stroke={7}
+                value={Math.min(70, ctlVal)}
+                max={70}
+                color={NEON.teal}
+              >
+                <div style={{ textAlign:'center' }}>
+                  <div style={{ color: NEON.teal, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${NEON.teal}66` }}>{Math.round(ctlVal)}</div>
+                  <div style={{ color: NEON.textFaint, fontSize: 8, fontWeight: 700, letterSpacing: '0.05em' }}>CTL</div>
+                </div>
+              </AnimatedRing>
+              <div style={{ color: NEON.text, fontSize: 11, fontWeight: 600 }}>Fitness</div>
+            </div>
+
+            {/* Fatica ring */}
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap: 6 }}>
+              <AnimatedRing
+                size={86}
+                stroke={7}
+                value={Math.min(80, atlVal)}
+                max={80}
+                color={NEON.orange}
+              >
+                <div style={{ textAlign:'center' }}>
+                  <div style={{ color: NEON.orange, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${NEON.orange}66` }}>{Math.round(atlVal)}</div>
+                  <div style={{ color: NEON.textFaint, fontSize: 8, fontWeight: 700, letterSpacing: '0.05em' }}>ATL</div>
+                </div>
+              </AnimatedRing>
+              <div style={{ color: NEON.text, fontSize: 11, fontWeight: 600 }}>Fatica</div>
+            </div>
+
+            {/* TSB ring */}
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap: 6 }}>
+              <AnimatedRing
+                size={86}
+                stroke={7}
+                value={Math.max(0, Math.min(60, tsbVal + 30))}
+                max={60}
+                color={form.color}
+              >
+                <div style={{ textAlign:'center' }}>
+                  <div style={{ color: form.color, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', textShadow: `0 0 8px ${form.color}66` }}>
+                    {tsbVal >= 0 ? '+' : ''}{Math.round(tsbVal)}
+                  </div>
+                  <div style={{ color: NEON.textFaint, fontSize: 8, fontWeight: 700, letterSpacing: '0.05em' }}>TSB</div>
+                </div>
+              </AnimatedRing>
+              <div style={{ color: form.color, fontSize: 11, fontWeight: 700 }}>{form.label}</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, padding: '10px 12px', background: `${form.color}10`, borderRadius: 10, borderLeft: `3px solid ${form.color}` }}>
+            <div style={{ color: form.color, fontSize: 11, fontWeight: 700, marginBottom: 2 }}>{form.desc}</div>
+            <div style={{ color: NEON.textDim, fontSize: 11, lineHeight: 1.4 }}>{form.advice}</div>
+          </div>
+        </GlowCard>
+      </div>
       )}
-      {pushResult === 'error' && (
-        <div style={{ margin:'8px 16px', background:'rgba(255,200,0,0.08)', border:'1px solid rgba(255,200,0,0.25)', borderRadius:14, padding:'14px 16px' }}>
-          <div style={{ color:C.yellow, fontSize:13, fontWeight:600, marginBottom:6 }}>⚠ Push diretto non disponibile</div>
-          <div style={{ color:C.sub, fontSize:12, lineHeight:1.55, marginBottom:10 }}>Devi essere loggato su Garmin Connect nello stesso browser. Usa il download TCX — si importa in 2 click.</div>
-          <button onClick={handleDownload} style={{ width:'100%', height:42, background:C.blue, border:'none', borderRadius:10, color:'white', fontSize:13, fontWeight:700, cursor:'pointer' }}>
-            ⬇ Scarica file .tcx
-          </button>
-        </div>
-      )}
-      {pushResult === 'downloaded' && (
-        <div style={{ margin:'8px 16px', background:C.blueDim, border:`1px solid ${C.blue}44`, borderRadius:14, padding:'14px 16px' }}>
-          <div style={{ color:C.blue, fontSize:14, fontWeight:700, marginBottom:6 }}>✓ File .tcx scaricato!</div>
-          <div style={{ color:C.sub, fontSize:12, lineHeight:1.55 }}>
-            1. Apri <span style={{ color:C.blue }}>connect.garmin.com</span> sul browser<br/>
-            2. Vai su <b style={{ color:C.text }}>Allenamenti → Importa</b><br/>
-            3. Carica il file <b style={{ color:C.text }}>.tcx</b> scaricato<br/>
-            4. Sincronizza il dispositivo — l'allenamento apparirà sul tuo {USER.garminDevice} ✓
+
+      {/* Avviso overtraining */}
+      {overTr.flags?.length > 0 && (
+        <div style={{ padding: '0 14px 14px' }}>
+          <div style={{
+            background: `${NEON.orange}10`,
+            border: `1px solid ${NEON.orange}33`,
+            borderRadius: 14, padding: '12px 14px',
+            display:'flex', gap: 10, alignItems:'flex-start',
+          }}>
+            <div style={{ width: 4, height: 30, background: NEON.orange, borderRadius: 2, flexShrink: 0, boxShadow: `0 0 6px ${NEON.orange}` }}/>
+            <div style={{ flex: 1 }}>
+              <div style={{ color: NEON.orange, fontSize: 12, fontWeight: 800 }}>{overTr.flags[0].title}</div>
+              <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 3, lineHeight: 1.4 }}>{overTr.flags[0].detail}</div>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Action buttons */}
-      <div style={{ padding:'12px 16px 28px', display:'flex', gap:10 }}>
-        <button onClick={handleDownload} style={{ flex:1, height:54, background:C.blueDim, border:`1px solid ${C.blue}44`, borderRadius:16, color:C.blue, fontSize:13, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2v13M7 11l5 5 5-5M3 19h18" stroke={C.blue} strokeWidth="2" strokeLinecap="round"/></svg>
-          Scarica .tcx
-        </button>
-        <button onClick={handlePush} disabled={pushing} style={{ flex:1.4, height:54, background: pushing ? 'rgba(255,255,255,0.08)' : accent, border:'none', borderRadius:16, color:'white', fontSize:13, fontWeight:700, cursor: pushing ? 'default' : 'pointer', boxShadow: pushing ? 'none' : `0 4px 20px ${accent}44`, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-          {pushing ? (
-            <><div style={{ width:16, height:16, borderRadius:8, border:'2px solid white', borderTopColor:'transparent', animation:'spin 0.8s linear infinite' }}/> Invio…</>
-          ) : (
-            <><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="1.8" strokeLinejoin="round"/></svg> Invia a Garmin</>
-          )}
-        </button>
+      {/* Workout di oggi */}
+      <div style={{ padding: '0 14px 14px' }}>
+        <SectionHeader kicker="OGGI" title="Allenamento" color={NEON.orange}/>
+        {todayWorkout?.why && (
+          <div style={{ color: NEON.textFaint, fontSize: 10, marginBottom: 8, fontStyle:'italic' }}>
+            ⓘ {todayWorkout.why}
+          </div>
+        )}
+        <div onClick={() => onNav('workout', todayWorkout)} style={{
+          background: `linear-gradient(135deg, ${NEON.orange}18 0%, ${NEON.bg2} 70%)`,
+          border: `1px solid ${NEON.orange}33`,
+          borderRadius: 18, padding: 16,
+          cursor: 'pointer',
+        }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ color: NEON.text, fontSize: 16, fontWeight: 800, letterSpacing: '-0.01em' }}>{todayWorkout.title}</div>
+              <div style={{ color: NEON.textDim, fontSize: 11.5, marginTop: 3, lineHeight: 1.4 }}>{todayWorkout.detail}</div>
+            </div>
+            <div style={{
+              background: NEON.orange, color: '#0A0A18',
+              fontSize: 10, fontWeight: 800, letterSpacing: '0.1em',
+              padding: '4px 8px', borderRadius: 6,
+              boxShadow: `0 0 10px ${NEON.orange}66`,
+            }}>{todayWorkout.intensity}</div>
+          </div>
+
+          <div style={{ display:'flex', gap: 18, flexWrap:'wrap' }}>
+            <div>
+              <div style={{ color: NEON.textFaint, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em' }}>DISTANZA</div>
+              <div style={{ color: NEON.text, fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em' }}>{todayWorkout.distance}<span style={{ fontSize: 11, color: NEON.textDim, marginLeft: 2 }}>km</span></div>
+            </div>
+            <div>
+              <div style={{ color: NEON.textFaint, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em' }}>DURATA</div>
+              <div style={{ color: NEON.text, fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em' }}>~{todayWorkout.duration}<span style={{ fontSize: 11, color: NEON.textDim, marginLeft: 2 }}>min</span></div>
+            </div>
+            <div>
+              <div style={{ color: NEON.textFaint, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em' }}>PASSO</div>
+              <div style={{ color: NEON.text, fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em' }}>{todayWorkout.pace}</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12, display:'flex', alignItems:'center', gap: 6, color: NEON.orange, fontSize: 11, fontWeight: 700 }}>
+            Apri allenamento
+            <span style={{ fontSize: 14 }}>→</span>
+          </div>
+        </div>
       </div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+
+      {/* PB Big numbers */}
+      <div style={{ padding: '0 14px 14px' }}>
+        <SectionHeader kicker="PERSONAL BEST" title={pbs?.['5k']?.fromStrava ? 'Da Strava' : 'I tuoi record'} color={NEON.purple}/>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 8 }}>
+          {[
+            { k: '5k',  label: '5K',  color: NEON.teal,   pb: pbs?.['5k'] },
+            { k: '10k', label: '10K', color: NEON.blue,   pb: pbs?.['10k'] },
+            { k: '21k', label: '21K', color: NEON.purple, pb: pbs?.['21k'] },
+          ].map(({ k, label, color, pb }) => (
+            <div key={k} style={{
+              background: NEON.bg2,
+              border: `1px solid ${color}22`,
+              borderRadius: 14, padding: '12px 10px',
+              textAlign:'center',
+              boxShadow: `0 0 14px ${color}11`,
+            }}>
+              <div style={{ color: color, fontSize: 9, fontWeight: 700, letterSpacing: '0.12em' }}>{label}</div>
+              <div style={{ color: NEON.text, fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', marginTop: 4, textShadow: `0 0 8px ${color}44` }}>{pb?.time || '—'}</div>
+              <div style={{ color: NEON.textDim, fontSize: 10, marginTop: 2 }}>{pb?.pace || ''}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Ultime corse da Strava */}
+      {activities && activities.length > 0 && (
+        <div style={{ padding: '0 14px 14px' }}>
+          <SectionHeader kicker="STRAVA" title="Ultime corse" color={NEON.orange}/>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {activities.slice(0, 5).map((a, i) => {
+              const km = a.distance ? (a.distance / 1000) : 0;
+              const mins = a.moving_time ? Math.round(a.moving_time / 60) : 0;
+              const paceSec = a.average_speed ? 1000 / a.average_speed : null;
+              const paceStr = paceSec
+                ? `${Math.floor(paceSec/60)}:${String(Math.round(paceSec%60)).padStart(2,'0')}/km`
+                : '—';
+              const hr = a.average_heartrate ? Math.round(a.average_heartrate) : null;
+              const date = a.start_date_local || a.start_date;
+              const d = date ? new Date(date) : null;
+              const dateStr = d && Number.isFinite(d.getTime())
+                ? d.toLocaleDateString('it-IT', { day: '2-digit', month: 'short', weekday: 'short' })
+                : '';
+              const isRace = (a.workout_type === 1) || /gara|race/i.test(a.name || '');
+              const accentColor = isRace ? NEON.orange : (km >= 14 ? NEON.blue : (paceSec && paceSec < 320 ? NEON.yellow : NEON.teal));
+
+              return (
+                <div key={a.id || i} style={{
+                  background: NEON.bg2,
+                  border: `1px solid ${accentColor}22`,
+                  borderRadius: 14,
+                  padding: 12,
+                  display: 'flex',
+                  gap: 12,
+                  alignItems: 'center',
+                }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 22,
+                    background: `${accentColor}22`,
+                    border: `1px solid ${accentColor}66`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                    fontSize: 20,
+                  }}>
+                    {isRace ? '🏁' : (km >= 14 ? '🏔' : (paceSec && paceSec < 320 ? '⚡' : '🏃'))}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                      <div style={{
+                        color: NEON.text, fontSize: 13, fontWeight: 700,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        maxWidth: '70%',
+                      }}>
+                        {a.name || 'Run'}
+                      </div>
+                      <div style={{ color: NEON.textDim, fontSize: 10, flexShrink: 0 }}>{dateStr}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 4, alignItems: 'baseline' }}>
+                      <div style={{ color: accentColor, fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em' }}>
+                        {km.toFixed(2)}<span style={{ fontSize: 10, color: NEON.textDim, fontWeight: 600 }}>km</span>
+                      </div>
+                      <div style={{ color: NEON.textDim, fontSize: 12 }}>{paceStr}</div>
+                      <div style={{ color: NEON.textDim, fontSize: 12 }}>{mins}min</div>
+                      {hr && <div style={{ color: NEON.textDim, fontSize: 12 }}>{hr}♥</div>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Settimana progress */}
+      <div style={{ padding: '0 14px 14px' }}>
+        <GlowCard glow={NEON.teal} intensity={0.1}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 10 }}>
+            <div>
+              <div style={{ color: NEON.textFaint, fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' }}>QUESTA SETTIMANA</div>
+              <div style={{ color: NEON.text, fontSize: 14, fontWeight: 700, marginTop: 2 }}>
+                Volume {weekStats.isAvg ? `· media ult. 4 sett` : ''}
+              </div>
+            </div>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ color: NEON.teal, fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>
+                {(Number.isFinite(weekStats.kmDone) ? weekStats.kmDone : 0).toFixed(1)}
+                <span style={{ color: NEON.textDim, fontSize: 12, fontWeight: 600 }}> / {weekStats.kmTarget} km</span>
+              </div>
+              <div style={{ color: NEON.textDim, fontSize: 10 }}>{weekStats.runs} uscite</div>
+            </div>
+          </div>
+          {/* Bar — guard contro divisione per 0 */}
+          <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow:'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: weekStats.kmTarget > 0 ? `${Math.min(100, (weekStats.kmDone / weekStats.kmTarget) * 100)}%` : '0%',
+              background: `linear-gradient(90deg, ${NEON.teal}, ${NEON.blue})`,
+              borderRadius: 3,
+              boxShadow: `0 0 8px ${NEON.teal}66`,
+              transition: 'width 0.6s ease',
+            }}/>
+          </div>
+        </GlowCard>
+      </div>
+
+      <div style={{ height: 24 }}/>
     </div>
   );
 }
 
-Object.assign(window, { GarminBuilderScreen, PRESET_WORKOUTS, generateTCX, downloadTCX, pushToGarminConnect });
+Object.assign(window, { HomeV2 });

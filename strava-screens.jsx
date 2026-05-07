@@ -1,976 +1,736 @@
-// js/screens-mobile.jsx — PlanScreen, CoachScreen, ProgressScreen, RecoveryScreen (mobile)
+
+// js/shared.jsx — shared data, constants, and base components
 const { useState, useEffect, useRef } = React;
 
-// ─── Plan ─────────────────────────────────────────────────────────────────────
-function PlanScreenM({ onNav, tweaks }) {
-  const accent = tweaks.accentColor || C.orange;
-  const [selectedDay, setSelectedDay] = useState(1);
-  const currentPhase = 'Scarico (Taper)';
-  const phases = ['Costruzione Base','Sviluppo Aerobico','Lavoro a Soglia','Prep. Gara','Scarico (Taper)'];
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg:        '#06060E',
+  card:      '#0D0D1C',
+  card2:     '#111126',
+  border:    'rgba(255,255,255,0.07)',
+  border2:   'rgba(255,255,255,0.12)',
+  orange:    '#FF4422',
+  orangeDim: 'rgba(255,68,34,0.15)',
+  orangeMid: 'rgba(255,68,34,0.25)',
+  teal:      '#00CFA8',
+  tealDim:   'rgba(0,207,168,0.14)',
+  blue:      '#4D9EFF',
+  blueDim:   'rgba(77,158,255,0.14)',
+  purple:    '#A78BFA',
+  purpleDim: 'rgba(167,139,250,0.14)',
+  yellow:    '#F6C94E',
+  text:      '#EEEEF8',
+  sub:       'rgba(238,238,248,0.55)',
+  faint:     'rgba(238,238,248,0.25)',
+  ghost:     'rgba(238,238,248,0.1)',
+};
 
-  const FULL_WEEK = [
-    { ...WEEK_SCHEDULE[0], workout: null },
-    { ...WEEK_SCHEDULE[1], workout: TODAY_WORKOUT },
-    { ...WEEK_SCHEDULE[2], workout: null },
-    { ...WEEK_SCHEDULE[3], workout: { type:'easy', title:'Attivazione pre-gara', distance:5, duration:30, targetPace:'6:10–6:40 /km', hrZone:'Zona 1–2', subtitle:'Gambe sveglie, ritmo leggero — nessuno sforzo' } },
-    { ...WEEK_SCHEDULE[4], workout: null },
-    { ...WEEK_SCHEDULE[5], workout: { type:'long', title:'Ultimo Lungo 14km', distance:14, duration:85, targetPace:'6:00–6:30 /km', hrZone:'Zona 2', subtitle:'Ultimo lungo di taper — goditi il ritmo, niente eroismo' } },
-    { ...WEEK_SCHEDULE[6], workout: { type:'recovery', title:'Recupero 4km', distance:4, duration:26, targetPace:'7:00+ /km', hrZone:'Zona 1', subtitle:'Scarico totale dopo il lungo' } },
-  ];
+// ─── Mock data ────────────────────────────────────────────────────────────────
+// ─── Date dinamiche ───────────────────────────────────────────────────────────
+const RACE_DATE_ISO = '2026-05-03'; // Mezza Maratona di Lucca
+const TRAINING_START_ISO = '2026-02-09'; // 12 settimane prima = inizio piano
 
-  const sel = FULL_WEEK[selectedDay];
-  const w = sel.workout;
-
-  return (
-    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
-      <div style={{ padding:'8px 20px 12px' }}>
-        <div style={{ color:C.sub, fontSize:13, marginBottom:2 }}>Piano di Allenamento</div>
-        <div style={{ color:C.text, fontSize:22, fontWeight:700, letterSpacing:'-0.4px' }}>Settimana {USER.currentWeek} di {USER.weeksTotal}</div>
-        <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:8 }}>
-          {phases.map((p,i)=>(
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:3 }}>
-              <div style={{ width:p===currentPhase?22:6, height:6, borderRadius:3, background:p===currentPhase?accent:'rgba(255,255,255,0.15)', transition:'width 0.3s' }}/>
-            </div>
-          ))}
-          <span style={{ color:accent, fontSize:11, fontWeight:600, marginLeft:4 }}>{currentPhase}</span>
-        </div>
-      </div>
-
-      {/* Day pills — riga compatta e leggibile */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <div style={{ display:'flex', gap:6 }}>
-          {FULL_WEEK.map((d,i)=>{
-            const active   = i===selectedDay;
-            const m        = TYPE_META[d.type];
-            const isDone   = d.status==='done';
-            const isToday  = d.status==='today';
-            const isRest   = d.type==='rest';
-            const dayShort = ['Lun','Mar','Mer','Gio','Ven','Sab','Dom'][i];
-
-            // Colore dot: tipo-specifico, oppure grigio per riposo
-            const dotColor = isRest ? 'rgba(255,255,255,0.25)' : m.color;
-            const bg       = active  ? m.bg
-                           : isToday ? `${m.color}18`
-                           : isDone  ? 'rgba(0,207,168,0.08)'
-                                     : 'rgba(255,255,255,0.035)';
-            const border   = active  ? `2px solid ${m.color}`
-                           : isToday ? `1.5px solid ${m.color}66`
-                           : isDone  ? `1px solid ${C.teal}33`
-                                     : `1px solid ${C.border}`;
-
-            return (
-              <div key={i} onClick={()=>setSelectedDay(i)}
-                style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:5, cursor:'pointer' }}>
-                {/* Etichetta giorno — sempre visibile, più leggibile */}
-                <div style={{
-                  color: active ? C.text : isToday ? m.color : C.sub,
-                  fontSize:10.5, fontWeight:active||isToday?700:500,
-                  letterSpacing:'0.02em', textTransform:'uppercase',
-                }}>{dayShort}</div>
-
-                {/* Tile */}
-                <div style={{
-                  width:'100%', aspectRatio:'1/1.05',
-                  borderRadius:11, background:bg, border,
-                  transition:'all 0.15s', position:'relative',
-                  display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:4,
-                }}>
-                  {/* Badge OGGI in alto */}
-                  {isToday && (
-                    <div style={{
-                      position:'absolute', top:-7, left:'50%', transform:'translateX(-50%)',
-                      background:m.color, color:'white', fontSize:8, fontWeight:800,
-                      letterSpacing:'0.08em', padding:'2px 6px', borderRadius:4,
-                    }}>OGGI</div>
-                  )}
-
-                  {/* Contenuto centrale */}
-                  {isDone ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7" stroke={C.teal} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  ) : isRest ? (
-                    <>
-                      <div style={{ fontSize:16, lineHeight:1 }}>💤</div>
-                      <div style={{ color:C.faint, fontSize:8.5, fontWeight:600, letterSpacing:'0.02em' }}>RIPOSO</div>
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ width:7, height:7, borderRadius:4, background:dotColor }}/>
-                      <div style={{ color:active?m.color:C.text, fontSize:12, fontWeight:700, lineHeight:1 }}>
-                        {d.dist}<span style={{ fontSize:9, fontWeight:500, opacity:0.7 }}>km</span>
-                      </div>
-                      <div style={{ color:active?m.color:C.faint, fontSize:8, fontWeight:600, letterSpacing:'0.04em', textTransform:'uppercase', opacity:0.85 }}>
-                        {m.label || d.type}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Legenda rapida */}
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:14, marginTop:10, flexWrap:'wrap' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7" stroke={C.teal} strokeWidth="3" strokeLinecap="round"/></svg>
-            <span style={{ color:C.faint, fontSize:10 }}>Fatto</span>
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
-            <div style={{ width:7, height:7, borderRadius:4, background:accent }}/>
-            <span style={{ color:C.faint, fontSize:10 }}>Da fare</span>
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
-            <span style={{ fontSize:11 }}>💤</span>
-            <span style={{ color:C.faint, fontSize:10 }}>Riposo</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Day detail */}
-      <div style={{ padding:'0 14px 14px' }}>
-        {w ? (
-          <Card onClick={()=>onNav('workout',w)} style={{ border:`1px solid ${TYPE_META[w.type].color}33` }}>
-            <div style={{ padding:'16px' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12 }}>
-                <div>
-                  <TypeBadge type={w.type} />
-                  <div style={{ color:C.text, fontSize:18, fontWeight:700, letterSpacing:'-0.3px', marginTop:6 }}>{w.title}</div>
-                  <div style={{ color:C.sub, fontSize:13, marginTop:3 }}>{w.subtitle}</div>
-                </div>
-                <div style={{ width:44, height:44, borderRadius:12, background:TYPE_META[w.type].bg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7z" fill={TYPE_META[w.type].color}/></svg>
-                </div>
-              </div>
-              <div style={{ display:'flex', gap:6 }}>
-                {w.distance>0 && <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:8, padding:'6px 10px' }}><span style={{ color:C.text, fontSize:13, fontWeight:600 }}>{w.distance} km</span></div>}
-                <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:8, padding:'6px 10px' }}><span style={{ color:C.text, fontSize:13, fontWeight:600 }}>{w.duration} min</span></div>
-                {w.targetPace && <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:8, padding:'6px 10px' }}><span style={{ color:C.text, fontSize:13, fontWeight:600 }}>{w.targetPace}</span></div>}
-              </div>
-              <div style={{ display:'flex', justifyContent:'flex-end', marginTop:12 }}>
-                <span style={{ color:accent, fontSize:13, fontWeight:600 }}>Vedi Dettagli →</span>
-              </div>
-            </div>
-          </Card>
-        ) : (
-          <Card style={{ cursor:'default' }}>
-            <div style={{ padding:'28px', textAlign:'center' }}>
-              <div style={{ fontSize:32, marginBottom:10 }}>🛌</div>
-              <div style={{ color:C.text, fontSize:17, fontWeight:600 }}>Giorno di Riposo</div>
-              <div style={{ color:C.sub, fontSize:14, marginTop:6, lineHeight:1.55 }}>Il recupero è allenamento. Dormi, mangia bene e lascia che le adattamenti avvengano.</div>
-            </div>
-          </Card>
-        )}
-      </div>
-
-      {/* Load summary */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:10 }}>Carico Settimanale</div>
-        <Card style={{ cursor:'default' }}>
-          <div style={{ padding:'16px' }}>
-            <div style={{ display:'flex', gap:0, marginBottom:14 }}>
-              {[{label:'Volume',val:'23 km',sub:'↓ Taper'},{label:'Corse',val:'5',sub:'+ 1 forza'},{label:'Lungo',val:'14 km',sub:'Ultimo taper'}].map((s,i)=>(
-                <div key={i} style={{ flex:1, borderRight:i<2?`1px solid ${C.border}`:'none', paddingRight:12, paddingLeft:i>0?12:0 }}>
-                  <div style={{ color:C.faint, fontSize:11, marginBottom:3 }}>{s.label}</div>
-                  <div style={{ color:C.text, fontSize:17, fontWeight:700 }}>{s.val}</div>
-                  <div style={{ color:accent, fontSize:11, marginTop:2 }}>{s.sub}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ color:C.faint, fontSize:11, marginBottom:6 }}>Bilanciamento Carico</div>
-            <div style={{ display:'flex', gap:3, height:8 }}>
-              {[{w:45,c:C.teal},{w:30,c:accent},{w:15,c:C.purple},{w:10,c:'rgba(255,255,255,0.2)'}].map((b,i)=>(
-                <div key={i} style={{ flex:b.w, height:'100%', background:b.c, borderRadius:2, opacity:0.8 }}/>
-              ))}
-            </div>
-            <div style={{ display:'flex', gap:10, marginTop:8 }}>
-              {[{c:C.teal,l:'Facile 45%'},{c:accent,l:'Tempo 30%'},{c:C.purple,l:'Duro 15%'}].map(b=>(
-                <div key={b.l} style={{ display:'flex', alignItems:'center', gap:4 }}>
-                  <div style={{ width:6, height:6, borderRadius:3, background:b.c }}/>
-                  <span style={{ color:C.faint, fontSize:11 }}>{b.l}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      {/* Race countdown */}
-      <div style={{ padding:'0 14px 24px' }}>
-        <div style={{ background:`linear-gradient(135deg, ${accent}18, ${C.purple}12)`, border:`1px solid ${accent}33`, borderRadius:18, padding:'16px 18px', display:'flex', alignItems:'center', gap:14 }}>
-          <div style={{ fontSize:32 }}>🏁</div>
-          <div>
-            <div style={{ color:C.text, fontSize:15, fontWeight:600 }}>{USER.raceName}</div>
-            <div style={{ color:accent, fontSize:26, fontWeight:800, letterSpacing:'-0.5px' }}>{USER.daysToRace} giorni</div>
-            <div style={{ color:C.sub, fontSize:12 }}>Obiettivo: {USER.goal} · PB: {USER.pb}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Coach Chat ───────────────────────────────────────────────────────────────
-// Helper: chiama /api/chat (Gemini) o fallback a window.claude in preview
-async function callCoachAI({ system, messages }) {
-  // Endpoint Vercel/Edge → Gemini API
+function _today() {
+  // Permette override per debug via ?fakeDate=YYYY-MM-DD
   try {
-    const r = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ system, messages }),
+    const q = new URLSearchParams(location.search).get('fakeDate');
+    if (q) return new Date(q + 'T12:00:00');
+  } catch (e) {}
+  const d = new Date();
+  d.setHours(12, 0, 0, 0); // normalizza mezzogiorno per evitare DST
+  return d;
+}
+function _daysBetween(a, b) {
+  const ms = b.getTime() - a.getTime();
+  return Math.round(ms / 86400000);
+}
+function _formatItDate(d) {
+  const months = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+function _formatItDateShort(d) {
+  const months = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
+  return `${d.getDate()} ${months[d.getMonth()]}`;
+}
+function _weekdayIt(d) {
+  return ['Domenica','Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato'][d.getDay()];
+}
+function _weekdayItShort(d) {
+  return ['Dom','Lun','Mar','Mer','Gio','Ven','Sab'][d.getDay()];
+}
+
+const TODAY = _today();
+const RACE_DATE = new Date(RACE_DATE_ISO + 'T12:00:00');
+const TRAINING_START = new Date(TRAINING_START_ISO + 'T12:00:00');
+const DAYS_TO_RACE = Math.max(0, _daysBetween(TODAY, RACE_DATE));
+const DAYS_FROM_START = Math.max(0, _daysBetween(TRAINING_START, TODAY));
+const CURRENT_WEEK = Math.min(12, Math.max(1, Math.floor(DAYS_FROM_START / 7) + 1));
+
+// Determina fase del piano in base a settimana corrente
+function _currentPhase(week) {
+  if (week <= 3) return 'Costruzione Base';
+  if (week <= 6) return 'Sviluppo Aerobico';
+  if (week <= 9) return 'Lavoro a Soglia';
+  if (week <= 11) return 'Prep. Gara';
+  return 'Scarico (Taper)';
+}
+const CURRENT_PHASE = _currentPhase(CURRENT_WEEK);
+// Quando siamo negli ultimi 14 giorni, forziamo taper
+const IS_TAPER = DAYS_TO_RACE <= 14;
+const PHASE_LABEL = IS_TAPER ? 'Scarico (Taper)' : CURRENT_PHASE;
+
+const USER = {
+  name: 'Sarah',
+  age: 42,
+  level: 'Intermedio',
+  goal: 'Sotto 1:58 a Lucca',
+  raceDate: _formatItDate(RACE_DATE),
+  raceDateISO: RACE_DATE_ISO,
+  raceName: 'Mezza Maratona di Lucca',
+  raceDistance: 21.097, // km
+  raceTargetTime: '1:58:00',
+  raceTargetPace: '5:35/km',
+  weeksTotal: 12,
+  currentWeek: CURRENT_WEEK,
+  daysToRace: DAYS_TO_RACE,
+  todayLabel: _weekdayIt(TODAY),
+  todayDate: _formatItDateShort(TODAY),
+  currentPhase: PHASE_LABEL,
+  isTaper: IS_TAPER,
+  shoes: 'New Balance FuelCell Rebel v5',
+  weeklyKm: 25,
+  longestRun: 18,
+  currentEasyPace: '6:30/km',
+  garminConnected: true,
+  garminDevice: 'Forerunner 55',
+  garminSyncAgo: '2h fa',
+};
+
+// ─── Profilo completo (integrato da piano ChatGPT) ────────────────────────────
+const RACE_STRATEGY = {
+  target: '1:58-2:00',
+  strategy: 'Negative split',
+  phases: [
+    { km:'0-5',   pace:'5:45-5:50', note:'Partenza controllata — NON farti trascinare' },
+    { km:'6-15',  pace:'5:38-5:42', note:'Ritmo gara stabile, respirazione regolare' },
+    { km:'16-18', pace:'5:35',      note:'Inizia fatica, mantieni controllo' },
+    { km:'19-21', pace:'5:25-5:30', note:'Chiusura forte — tutto quello che hai' },
+  ],
+  shoes: 'New Balance FuelCell Rebel v5',
+};
+
+const GEL_PLAN = [
+  { when:'Pre-gara (45min)',  type:'NamedSport Amino Gel', note:'Lento — amminoacidi' },
+  { when:'Km 6',              type:'Enervit Liquid Gel',   note:'Rapido — con acqua' },
+  { when:'Km 12',              type:'Enervit Liquid Gel',   note:'Rapido — con acqua' },
+  { when:'Km 17 (opzionale)',  type:'½ Enervit',            note:'Solo se serve spinta' },
+];
+
+const LONG_RUN_LAST = {
+  distance: 17.88, time: '1:56:44', pace: '6:32/km', avgHR: 140,
+  finalKm: ['5:34','5:19','5:26'], // progressione finale
+  note: 'Chiusura forte in progressione — segnale ottimo per Lucca',
+};
+// seconds = totale in secondi; ricorda: 23:50 = 23*60+50 = 1430
+const PB = {
+  '5k':  { distance: 5,      time: '23:50',    seconds: 1430, pace: '4:46/km', date: '15 Mar 2026' },
+  '10k': { distance: 10,     time: '51:03',    seconds: 3063, pace: '5:06/km', date: '22 Feb 2026' },
+  '21k': { distance: 21.097, time: '2:03:00',  seconds: 7380, pace: '5:50/km', date: '10 Nov 2025' },
+};
+
+// ─── Formula di Riegel: T2 = T1 * (D2/D1)^1.06 ────────────────────────────────
+// Stima tempo su distanza D2 dato un PB T1 su D1
+function riegelPredict(pbSeconds, pbDistKm, targetDistKm, exp = 1.06) {
+  return Math.round(pbSeconds * Math.pow(targetDistKm / pbDistKm, exp));
+}
+function fmtTime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+function fmtPace(sec, distKm) {
+  const pacePerKm = Math.round(sec / distKm);
+  const m = Math.floor(pacePerKm / 60);
+  const s = pacePerKm % 60;
+  return `${m}:${String(s).padStart(2,'0')}/km`;
+}
+
+// Stime per la mezza usando i PB più recenti (prende il migliore tra 5k e 10k)
+const RACE_ESTIMATES = (() => {
+  // Usa 10k come predittore più affidabile per la mezza
+  const from10k = riegelPredict(PB['10k'].seconds, 10, 21.097);
+  const from5k  = riegelPredict(PB['5k'].seconds,  5,  21.097);
+  const currentPB = PB['21k'].seconds;
+  // Best estimate = media pesata 10k (peso 2) + PB attuale (peso 1)
+  const best = Math.round((from10k * 2 + currentPB) / 3);
+  return {
+    target:     { time: '1:58:00', seconds: 7080, pace: '5:35/km' },
+    conservative: { time: fmtTime(currentPB), seconds: currentPB, pace: fmtPace(currentPB, 21.097), source: 'PB attuale' },
+    realistic:  { time: fmtTime(best), seconds: best, pace: fmtPace(best, 21.097), source: 'stima Riegel (10k)' },
+    optimistic: { time: fmtTime(from5k), seconds: from5k, pace: fmtPace(from5k, 21.097), source: 'stima dal 5k' },
+  };
+})();
+
+const RECOVERY_DATA = {
+  score: 78,
+  sleep: 7.2,
+  sleepQuality: 'Buono',
+  hrv: 52,
+  restingHR: 58,
+  fatigue: 'Moderata',
+  soreness: 'Bassa',
+  recommendation: 'go_as_planned',
+  trainingLoad: 'Moderato',
+  loadTrend: 'stabile',
+};
+
+// ─── Data/ora dinamiche ─────────────────────────────────────────────────────
+const DAYS_IT = ['Domenica','Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato'];
+const DAYS_IT_SHORT = ['Dom','Lun','Mar','Mer','Gio','Ven','Sab'];
+const MONTHS_IT = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
+
+function getToday() {
+  const d = new Date();
+  return {
+    date: d,
+    dayIdx: d.getDay(),                      // 0=Dom ... 6=Sab
+    dayName: DAYS_IT[d.getDay()],            // "Giovedì"
+    dayShort: DAYS_IT_SHORT[d.getDay()],     // "Gio"
+    dateLabel: `${DAYS_IT[d.getDay()]}, ${d.getDate()} ${MONTHS_IT[d.getMonth()]}`,
+    dateShort: `${d.getDate()} ${MONTHS_IT[d.getMonth()]}`,
+  };
+}
+
+function daysUntil(targetDateStr) {
+  // targetDateStr = 'YYYY-MM-DD' o Date
+  const target = typeof targetDateStr === 'string' ? new Date(targetDateStr) : targetDateStr;
+  const now = new Date();
+  target.setHours(0,0,0,0);
+  const t = new Date(); t.setHours(0,0,0,0);
+  return Math.max(0, Math.round((target - t) / (1000*60*60*24)));
+}
+
+// Workout per ogni giorno della settimana (0=Dom, 1=Lun, ..., 6=Sab)
+// Piano taper 11 giorni: riposo/facile/lungo corto
+const WORKOUTS_BY_DAY = {
+  0: { // Domenica - lungo (se non fatto sabato)
+    id: 'w_sun', type: 'long', title: 'Lungo Lento di Taper',
+    subtitle: 'Ultimo lungo di preparazione — goditi il ritmo',
+    distance: 14, duration: 85, targetPace: '6:00–6:30 /km',
+    hrZone: 'Zona 2', rpe: '5/10',
+    warmup:  { label: 'Riscaldamento', duration: '10 min', desc: 'Cammino veloce + jogging', pace: '6:45 /km', zone: 'Zona 1' },
+    mainSet: { label: 'Lungo aerobico', duration: '65 min', desc: 'Ritmo costante, respirazione regolare', pace: '6:00–6:30 /km', zone: 'Zona 2' },
+    cooldown:{ label: 'Defaticamento', duration: '10 min', desc: 'Jogging lento + cammino + stretching', pace: '6:45+ /km', zone: 'Zona 1' },
+    coachNote: "Ultimo lungo prima della gara. Non fare eroismi — il lavoro è fatto. Gambe sciolte, respiro controllato.",
+    avoid: ['Spingere il ritmo', 'Saltare la colazione', 'Correre a stomaco vuoto'],
+    altEasy: { title: 'Versione Ridotta', desc: '10 km facili se stanco', total: '60 min' },
+  },
+  1: { // Lunedì - riposo
+    id: 'w_mon', type: 'rest', title: 'Giorno di Riposo',
+    subtitle: 'Il recupero è allenamento',
+    distance: 0, duration: 0, targetPace: '—', hrZone: '—', rpe: '0/10',
+    coachNote: "Oggi riposo totale. Dormi, mangia bene, idratati. Il corpo assorbe gli adattamenti nel riposo.",
+    avoid: ['Correre', 'Allenamenti intensi', 'Sedentarietà totale — cammina pure'],
+  },
+  2: { // Martedì - easy
+    id: 'w_tue', type: 'easy', title: 'Corsa Facile di Scarico',
+    subtitle: 'Mantieni le gambe sveglie senza affaticarle',
+    distance: 6.0, duration: 38, targetPace: '6:00–6:30 /km',
+    hrZone: 'Zona 1–2', rpe: '4/10',
+    warmup:  { label: 'Inizio', duration: '5 min', desc: 'Cammino veloce poi jogging leggero', pace: '7:00+ /km', zone: 'Zona 1' },
+    mainSet: { label: 'Corsa facile', duration: '28 min', desc: 'Ritmo completamente conversazionale', pace: '6:00–6:30 /km', zone: 'Zona 2' },
+    cooldown:{ label: 'Defaticamento', duration: '5 min', desc: 'Cammino finale + stretching leggero', pace: 'passo', zone: 'Zona 1' },
+    coachNote: "Settimana di scarico: corsa solo per tenere le gambe attive. NON per condizione. Vai lento.",
+    avoid: ['Andare troppo forte', 'Aggiungere km extra', 'Stretching intenso'],
+    altEasy: { title: 'Versione Ridotta', desc: '20 min di jogging leggero', total: '20 min' },
+  },
+  3: { // Mercoledì - riposo o forza
+    id: 'w_wed', type: 'rest', title: 'Riposo Attivo',
+    subtitle: 'Cammino leggero o mobilità',
+    distance: 0, duration: 20, targetPace: '—', hrZone: 'Zona 1', rpe: '2/10',
+    coachNote: "Riposo attivo: 20 min di cammino, mobilità anche/caviglie. No corsa.",
+    avoid: ['Correre anche se ti senti bene', 'Carichi pesanti'],
+  },
+  4: { // Giovedì - tempo corto di taper
+    id: 'w_thu', type: 'tempo', title: 'Richiamo Ritmo Gara',
+    subtitle: 'Breve richiamo per risvegliare le gambe',
+    distance: 6.5, duration: 42, targetPace: '5:35 /km',
+    hrZone: 'Zona 3–4', rpe: '7/10',
+    warmup:  { label: 'Riscaldamento', duration: '12 min', desc: 'Jogging + 4 allunghi 80m', pace: '6:20 /km', zone: 'Zona 1–2' },
+    mainSet: { label: '3 km a ritmo gara', duration: '17 min', desc: '3 km continui @ ritmo mezza (5:35)', pace: '5:35 /km', zone: 'Zona 3–4' },
+    cooldown:{ label: 'Defaticamento', duration: '13 min', desc: 'Jogging lento + stretching', pace: '6:45 /km', zone: 'Zona 1' },
+    coachNote: "Unico richiamo di ritmo prima della gara. Breve e specifico: solo 3 km al ritmo target. Non di più, non di meno.",
+    avoid: ['Fare più di 3 km a ritmo', 'Spingere oltre', 'Saltare il defaticamento'],
+    altEasy: { title: 'Se stanco', desc: '5 km facili + 4 allunghi', total: '35 min' },
+  },
+  5: { // Venerdì - riposo
+    id: 'w_fri', type: 'rest', title: 'Giorno di Riposo',
+    subtitle: 'Ricarica muscolare',
+    distance: 0, duration: 0, targetPace: '—', hrZone: '—', rpe: '0/10',
+    coachNote: "Riposo totale. Idratati bene e dormi 8h.",
+    avoid: ['Attività intense', 'Alcool'],
+  },
+  6: { // Sabato - attivazione pre-gara o lungo
+    id: 'w_sat', type: 'easy', title: 'Attivazione Pre-Gara',
+    subtitle: 'Gambe sveglie, ritmo leggero — nessuno sforzo',
+    distance: 5, duration: 30, targetPace: '6:10–6:40 /km',
+    hrZone: 'Zona 1–2', rpe: '3/10',
+    warmup:  { label: 'Inizio', duration: '5 min', desc: 'Cammino + jogging molto lento', pace: '7:00 /km', zone: 'Zona 1' },
+    mainSet: { label: 'Facile', duration: '20 min', desc: 'Ritmo super conversazionale + 3-4 allunghi finali', pace: '6:10–6:40 /km', zone: 'Zona 2' },
+    cooldown:{ label: 'Defaticamento', duration: '5 min', desc: 'Cammino + mobilità leggera', pace: 'passo', zone: 'Zona 1' },
+    coachNote: "Sveglia le gambe, non stancarle. Se hai il lungo al sabato, fallo di sabato mattina e sposta l'attivazione.",
+    avoid: ['Andare forte', 'Saltare gli allunghi — servono'],
+    altEasy: { title: 'Solo allunghi', desc: '15 min jog + 4 allunghi', total: '20 min' },
+  },
+};
+
+function getTodayWorkout() {
+  const t = getToday();
+  return { ...WORKOUTS_BY_DAY[t.dayIdx], day: t.dayName, dayShort: t.dayShort };
+}
+
+// ─── Piano taper dinamico, ancorato alla DATA della gara ────────────────────
+// Mappa giorni-prima-della-gara → workout
+// 0 = giorno gara, 1 = giorno prima, ecc.
+const TAPER_BY_DAYS_TO_RACE = {
+  0:  { type:'long',   title:'🏁 Gara — Lucca 21k',     dist:21.097, key:true,  duration:118 },
+  1:  { type:'rest',   title:'Riposo — pasta party',     dist:0,      key:false, duration:0  },
+  2:  { type:'easy',   title:'Jogging 3km + 4 allunghi', dist:3,      key:false, duration:22 },
+  3:  { type:'rest',   title:'Riposo',                   dist:0,      key:false, duration:0  },
+  4:  { type:'tempo',  title:'Attivazione 4km + 4×100m', dist:4,      key:true,  duration:28 },
+  5:  { type:'rest',   title:'Riposo',                   dist:0,      key:false, duration:0  },
+  6:  { type:'easy',   title:'Sblocca-gambe 3km',        dist:3,      key:false, duration:22 },
+  7:  { type:'easy',   title:'Corsa facile 5km',         dist:5,      key:false, duration:32 },
+  8:  { type:'rest',   title:'Riposo',                   dist:0,      key:false, duration:0  },
+  9:  { type:'tempo',  title:'Attivazione 5km + 3×1′',   dist:5,      key:true,  duration:35 },
+  10: { type:'rest',   title:'Riposo',                   dist:0,      key:false, duration:0  },
+  11: { type:'easy',   title:'Corsa Facile 6km',         dist:6,      key:false, duration:38 },
+  12: { type:'rest',   title:'Riposo',                   dist:0,      key:false, duration:0  },
+  13: { type:'long',   title:'Lungo leggero 10km',       dist:10,     key:true,  duration:66 },
+  14: { type:'rest',   title:'Riposo',                   dist:0,      key:false, duration:0  },
+};
+
+// Per giorni > 14, fallback su pattern settimanale base
+const PRE_TAPER_WEEK = {
+  1: { type:'rest',  title:'Riposo',                 dist:0, key:false, duration:0  },
+  2: { type:'easy',  title:'Corsa Facile 7km',       dist:7, key:false, duration:42 },
+  3: { type:'rest',  title:'Riposo',                 dist:0, key:false, duration:0  },
+  4: { type:'tempo', title:'Tempo 6km @ ritmo gara', dist:6, key:true,  duration:38 },
+  5: { type:'rest',  title:'Riposo',                 dist:0, key:false, duration:0  },
+  6: { type:'easy',  title:'Corsa Facile 5km',       dist:5, key:false, duration:32 },
+  0: { type:'long',  title:'Lungo 14km',             dist:14, key:true, duration:88 },
+};
+
+function _workoutForDate(date) {
+  const days = _daysBetween(date, RACE_DATE);
+  if (days < 0) return null; // dopo la gara
+  if (days <= 14) return TAPER_BY_DAYS_TO_RACE[days];
+  return PRE_TAPER_WEEK[date.getDay()];
+}
+
+function _buildWeekSchedule() {
+  // Costruisci la settimana corrente (Lun → Dom)
+  const today = new Date(TODAY);
+  const dow = today.getDay(); // 0=Dom
+  const daysFromMonday = (dow + 6) % 7; // Lun=0
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - daysFromMonday);
+
+  const labels = ['Lun','Mar','Mer','Gio','Ven','Sab','Dom'];
+  const out = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    const w = _workoutForDate(d) || { type:'rest', title:'—', dist:0, key:false, duration:0 };
+    const diff = _daysBetween(today, d);
+    let status = 'upcoming';
+    if (diff < 0) status = 'done';
+    else if (diff === 0) status = 'today';
+    out.push({
+      day: labels[i],
+      date: d.getDate(),
+      type: w.type,
+      title: w.title,
+      status,
+      dist: w.dist,
+      key: w.key,
+      duration: w.duration,
+      dow: d.getDay(),
     });
-    const data = await r.json().catch(() => ({}));
-    if (r.ok && data.reply) return data.reply;
-    // Se /api/chat dice "API key non configurata" e siamo in preview, prova window.claude
-    if (window.claude && window.claude.complete) {
-      return await window.claude.complete({
-        messages: [
-          { role: 'user', content: system },
-          { role: 'assistant', content: 'Perfetto, sono il tuo coach. Dimmi pure come ti senti o cosa vuoi sapere.' },
-          ...messages,
-        ],
-      });
-    }
-    throw new Error(data.error || `HTTP ${r.status}`);
-  } catch (err) {
-    // Ultimo fallback: Claude nel preview
-    if (window.claude && window.claude.complete) {
-      return await window.claude.complete({
-        messages: [
-          { role: 'user', content: system },
-          { role: 'assistant', content: 'Perfetto, sono il tuo coach. Dimmi pure come ti senti o cosa vuoi sapere.' },
-          ...messages,
-        ],
-      });
-    }
-    throw err;
   }
+  return out;
 }
 
-function CoachScreenM({ tweaks, onNav, auth }) {
-  const accent = tweaks.accentColor || C.orange;
-  const [messages, setMessages] = useState(CHAT_HISTORY);
-  const [input, setInput] = useState('');
-  const [typing, setTyping] = useState(false);
-  const [aiReady, setAiReady] = useState(true);
-  const [stravaActs, setStravaActs] = useState(null); // null = loading, [] = nessuna
-  const bottomRef = useRef(null);
+const WEEK_SCHEDULE = _buildWeekSchedule();
 
-  // Carica attività Strava reali (storico fino a 200) per dare contesto live al Coach
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!auth) { setStravaActs([]); return; }
-      try {
-        const acts = await fetchActivities(auth, 200);
-        if (!cancelled) setStravaActs(acts || []);
-      } catch (e) {
-        if (!cancelled) setStravaActs([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [auth]);
+// ─── Workout di oggi, ancorato alla data della gara ────────────────────────
+function _buildTodayWorkout() {
+  const w = _workoutForDate(TODAY) || { type:'rest', title:'Riposo', dist:0, duration:0, key:false };
+  const dayLabel = _weekdayIt(TODAY);
+  const isRaceDay = DAYS_TO_RACE === 0;
 
-  useEffect(() => {
-    setAiReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (bottomRef.current) {
-      const el = bottomRef.current.closest('[data-scroll]');
-      if (el) el.scrollTop = el.scrollHeight;
-    }
-  }, [messages, typing]);
-
-  const useRealAI = tweaks.claudeAI !== false; // default ON
-
-  // Override USER con tweaks (gara parametrizzabile)
-  const race = {
-    name: tweaks.raceName || USER.raceName,
-    date: tweaks.raceDate || USER.raceDate,
-    distance: tweaks.raceDistance || USER.raceDistance,
-    target: tweaks.raceTargetTime || USER.raceTargetTime,
-    pace: tweaks.raceTargetPace || USER.raceTargetPace,
-    days: tweaks.daysToRace ?? USER.daysToRace,
-  };
-  const weeklyKm = tweaks.weeklyKm ?? USER.weeklyKm;
-  const longestRun = tweaks.longestRun ?? USER.longestRun;
-
-  // Parser blocco workout JSON dalla risposta del coach
-  const parseWorkoutBlock = (text) => {
-    const match = text.match(/```workout\s*([\s\S]*?)```/);
-    if (!match) return { cleanText: text, workout: null };
-    try {
-      const workout = JSON.parse(match[1].trim());
-      const cleanText = text.replace(/```workout[\s\S]*?```/, '').trim();
-      return { cleanText, workout };
-    } catch (e) {
-      return { cleanText: text, workout: null };
-    }
+  const presets = {
+    rest: {
+      id: 'w_rest', type:'rest', title: w.title,
+      subtitle: 'Recupero attivo — lascia che il corpo si ricarichi',
+      distance: 0, duration: 0, targetPace: '—', hrZone: 'Riposo', rpe: '0/10',
+      warmup: null, mainSet: null, cooldown: null,
+      coachNote: `Oggi è ${dayLabel} — giornata di riposo. Siamo a ${DAYS_TO_RACE} giorni da Lucca: il riposo è parte del piano, non una pausa. Cammina, idratati, dormi bene. Niente sport alternativi intensi.`,
+      avoid: ['Corse "di compensazione"', 'Allenamenti intensi alternativi', 'Stare in piedi per ore'],
+      altEasy: null,
+    },
+    easy: {
+      id: 'w_easy', type:'easy', title: w.title,
+      subtitle: 'Mantieni le gambe sveglie senza affaticarle',
+      distance: w.dist, duration: w.duration, targetPace: '6:00–6:30 /km', hrZone: 'Zona 1–2', rpe: '4/10',
+      warmup:  { label: 'Inizio', duration: '5 min', desc: 'Cammino veloce poi jogging leggero', pace: '7:00+ /km', zone: 'Zona 1' },
+      mainSet: { label: 'Corsa facile', duration: `${Math.max(10, w.duration - 10)} min`, desc: 'Ritmo completamente conversazionale — devi poter cantare', pace: '6:00–6:30 /km', zone: 'Zona 2' },
+      cooldown:{ label: 'Defaticamento', duration: '5 min', desc: 'Cammino finale + stretching leggero', pace: 'passo', zone: 'Zona 1' },
+      coachNote: `${dayLabel} — a ${DAYS_TO_RACE} giorni dalla Mezza di Lucca. Questa corsa NON fa condizione, la conserva. Vai lento (6:30/km va benissimo), goditi il movimento. Se senti le gambe pesanti è normalissimo durante il taper.`,
+      avoid: ['Andare troppo forte perché ti senti bene', 'Aggiungere km extra', 'Fare stretching intenso — solo leggero'],
+      altEasy: { title: 'Versione Ridotta', desc: 'Solo 20 min di jogging leggero se ti senti stanca', total: '20 min' },
+    },
+    tempo: {
+      id: 'w_tempo', type:'tempo', title: w.title,
+      subtitle: 'Attivazione neuromuscolare — breve ma specifica',
+      distance: w.dist, duration: w.duration, targetPace: '5:35 /km (blocchi)', hrZone: 'Zona 3', rpe: '6/10',
+      warmup:  { label: 'Riscaldamento', duration: '10 min', desc: 'Jogging leggero + 4 allunghi di 50m', pace: '6:30 /km', zone: 'Zona 1–2' },
+      mainSet: { label: 'Blocchi a ritmo gara', duration: `${Math.max(10, w.duration - 18)} min`, desc: 'Al passo gara (5:35/km), recupero 2 min camminando tra ogni prova', pace: '5:30–5:40 /km', zone: 'Zona 3' },
+      cooldown:{ label: 'Defaticamento', duration: '8 min', desc: 'Jogging leggero + stretching', pace: '7:00 /km', zone: 'Zona 1' },
+      coachNote: `${dayLabel} — attivazione nel taper di Lucca (gara fra ${DAYS_TO_RACE} giorni). Obiettivo: svegliare i muscoli e ricordare il ritmo gara. NON fare di più, anche se ti senti bene. Poche, brevi, precise.`,
+      avoid: ['Spingere più forte del passo gara', 'Aumentare numero di ripetute', 'Ridurre i recuperi'],
+      altEasy: { title: 'Se ti senti stanca', desc: 'Sostituisci con corsa facile 4km + 4 allunghi', total: '30 min' },
+    },
+    long: {
+      id: 'w_long', type:'long', title: w.title,
+      subtitle: isRaceDay ? 'Giorno gara! Fidati del piano' : 'Lungo del blocco',
+      distance: w.dist, duration: w.duration,
+      targetPace: isRaceDay ? '5:35 /km (gara)' : '6:10–6:30 /km',
+      hrZone: isRaceDay ? 'Zona 3–4' : 'Zona 2–3',
+      rpe: isRaceDay ? '9/10' : '5/10',
+      warmup:  { label: 'Riscaldamento', duration: '10 min', desc: isRaceDay ? 'Routine pre-gara: mobilità + allunghi + attivazione' : 'Jogging progressivo', pace: '7:00 /km', zone: 'Zona 1' },
+      mainSet: { label: isRaceDay ? 'GARA 21.097 km' : 'Lungo leggero', duration: `${w.duration} min`, desc: isRaceDay ? 'Parti controllata 5:45/km, stabile a 5:38/km da km 6, dai tutto da km 16' : 'Ritmo conversazionale costante', pace: isRaceDay ? '5:35 /km' : '6:20 /km', zone: isRaceDay ? 'Zona 3–4' : 'Zona 2' },
+      cooldown:{ label: 'Defaticamento', duration: '10 min', desc: 'Cammino + stretching completo', pace: 'passo', zone: 'Zona 1' },
+      coachNote: isRaceDay
+        ? "🏁 È il giorno! Fidati di tutto il lavoro fatto nelle 12 settimane. Parti CONTROLLATA (NON farti trascinare nei primi km), idratati al km 6, gel liquido al 6 e 12. Negative split = gara riuscita."
+        : `${dayLabel} — lungo nel taper. Nessun lavoro di qualità, solo volume gentile. A ${DAYS_TO_RACE} giorni dalla gara serve movimento, non fatica.`,
+      avoid: isRaceDay
+        ? ['Partire troppo forte', 'Saltare i rifornimenti', 'Provare cose nuove (scarpe, gel, strategia)']
+        : ['Aumentare il passo', 'Allungare la distanza', 'Aggiungere ripetute'],
+      altEasy: null,
+    },
   };
 
-  // ─── Calcolo metriche LIVE da Strava per il Coach ───────────────────────────
-  const stravaInsights = (() => {
-    if (!stravaActs || stravaActs.length === 0) return null;
-    try {
-      const trainingData = activitiesToTrainingData(stravaActs);
-      if (!trainingData.length) return null;
-      const loadHistory = calculateTrainingLoad(trainingData, 60);
-      const last = loadHistory[loadHistory.length - 1] || { ctl:0, atl:0, tsb:0 };
-      const safe = (v) => Number.isFinite(+v) ? +v : 0;
-      const ctl = safe(last.ctl), atl = safe(last.atl), tsb = safe(last.tsb);
-
-      // Ultimi 14 giorni
-      const now = Date.now();
-      const last14 = trainingData.filter(a => {
-        const t = new Date(a.date).getTime();
-        return Number.isFinite(t) && (now - t) <= 14 * 86400000;
-      });
-      const km14 = last14.reduce((s,a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
-
-      // Ultime 4 settimane medie
-      const last28 = trainingData.filter(a => {
-        const t = new Date(a.date).getTime();
-        return Number.isFinite(t) && (now - t) <= 28 * 86400000;
-      });
-      const km28 = last28.reduce((s,a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
-      const avgWeeklyKm = +(km28 / 4).toFixed(1);
-
-      // Ultime 5 corse riassunte
-      const recent = trainingData.slice(-5).reverse().map(a => {
-        const d = new Date(a.date);
-        const dStr = Number.isFinite(d.getTime())
-          ? `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`
-          : '—';
-        const km = Number.isFinite(+a.distance_km) ? +a.distance_km : 0;
-        const pace = a.avg_pace_sec_km
-          ? `${Math.floor(a.avg_pace_sec_km/60)}:${String(Math.round(a.avg_pace_sec_km%60)).padStart(2,'0')}/km`
-          : '—';
-        const hr = a.avg_hr ? `${Math.round(a.avg_hr)}bpm` : '';
-        const tss = Number.isFinite(+a.tss) ? `TSS ${Math.round(a.tss)}` : '';
-        return `- ${dStr}: ${km.toFixed(1)}km @ ${pace}${hr ? ' · FC ' + hr : ''}${tss ? ' · ' + tss : ''} (${a.name || a.type || 'Run'})`;
-      }).join('\n');
-
-      // Lungo più recente (≥ 14km)
-      const longRuns = trainingData.filter(a => Number.isFinite(+a.distance_km) && +a.distance_km >= 14);
-      const lastLong = longRuns[longRuns.length - 1];
-      const lastLongStr = lastLong
-        ? `${(+lastLong.distance_km).toFixed(1)}km @ ${lastLong.avg_pace_sec_km ? Math.floor(lastLong.avg_pace_sec_km/60)+':'+String(Math.round(lastLong.avg_pace_sec_km%60)).padStart(2,'0') : '—'}/km${lastLong.avg_hr ? ' · FC '+Math.round(lastLong.avg_hr)+'bpm' : ''} (${new Date(lastLong.date).toLocaleDateString('it-IT')})`
-        : 'nessuno negli ultimi mesi';
-
-      // Forma
-      const form = tsb > 5 ? 'fresco/scarico'
-                  : tsb > -10 ? 'in equilibrio'
-                  : tsb > -20 ? 'affaticato'
-                  : 'molto affaticato';
-
-      return {
-        ctl, atl, tsb, form,
-        km14: +km14.toFixed(1),
-        avgWeeklyKm,
-        runs28: last28.length,
-        recent,
-        lastLongStr,
-        totalActs: trainingData.length,
-      };
-    } catch (e) {
-      return null;
-    }
-  })();
-
-  // Contesto completo passato a Claude
-  const buildSystemContext = () => `Agisci come un Running Coach professionista specializzato nella preparazione della mezza maratona, con approccio scientifico, prudente, motivante e altamente personalizzato.
-
-RUOLO
-Sei il coach di corsa personale di ${tweaks.userName || USER.name}. Devi:
-- spiegare ogni allenamento in modo chiaro e pratico
-- adattare il programma in base ai feedback reali
-- monitorare carico, recupero e segnali di affaticamento
-- privilegiare SEMPRE salute, continuità e prevenzione infortuni rispetto alla performance a tutti i costi
-
-STILE
-- Tono professionale, concreto, incoraggiante
-- Linguaggio chiaro ma competente, da vero coach
-- Istruzioni precise, niente frasi vaghe
-- Motivante senza essere aggressivo o estremo
-- Diretto e corretto quando serve
-- Risposte CONCISE: max 4-6 frasi salvo richiesta esplicita di approfondimento
-
-PRINCIPI
-1. Sicurezza prima di tutto — se emergono segnali di dolore/stanchezza anomala/problemi, riduci carico e consiglia prudenza. In presenza di sintomi importanti, suggerisci di consultare medico/fisioterapista.
-2. Personalizzazione continua — usa sempre i dati personali qui sotto.
-3. Non inventare dati fisiologici precisi se non li hai.
-4. Non suggerire di aumentare volume/intensità durante il taper (siamo in taper!).
-5. Non trattare ogni seduta dura come obbligatoria.
-
-FORMATO RISPOSTE
-Quando opportuno, usa sezioni brevi come:
-- "Analisi" / "Allenamento di oggi" / "Adattamento consigliato" / "Attenzione" / "Prossimo passo"
-Se l'utente manda dati di una corsa, analizza numeri + sensazioni, dì cosa è andato bene, evidenzia criticità, adatta il prossimo allenamento.
-
-─── PROFILO ATLETA ─────────────────────────────
-Nome: ${tweaks.userName || USER.name}
-Età: ${USER.age}
-Livello: ${USER.level}
-Allenamenti/settimana: 3
-Volume tipico: ${weeklyKm} km/sett
-Corsa più lunga fatta: ${longestRun} km
-Ritmo facile attuale: ${USER.currentEasyPace}
-
-─── GARA OBIETTIVO ──────────────────────────────
-${race.name} — ${race.date} (mancano ${race.days} giorni)
-Distanza: ${race.distance} km
-Target: ${race.target} (${race.pace})
-Scarpe gara: ${RACE_STRATEGY.shoes}
-
-─── PERSONAL BEST ───────────────────────────────
-5k: ${PB['5k'].time} (${PB['5k'].pace}) — ${PB['5k'].date}
-10k: ${PB['10k'].time} (${PB['10k'].pace}) — ${PB['10k'].date}
-21k: ${PB['21k'].time} (${PB['21k'].pace}) — ${PB['21k'].date}
-
-─── STIME GARA (Riegel) ─────────────────────────
-Conservativa: ${RACE_ESTIMATES.conservative.time} (${RACE_ESTIMATES.conservative.pace})
-Realistica:   ${RACE_ESTIMATES.realistic.time} (${RACE_ESTIMATES.realistic.pace})
-Ottimistica:  ${RACE_ESTIMATES.optimistic.time} (${RACE_ESTIMATES.optimistic.pace})
-
-─── STRATEGIA GARA CONCORDATA ───────────────────
-Strategia: Negative Split, target ${RACE_STRATEGY.target}
-${RACE_STRATEGY.phases.map(p => `- km ${p.km}: ${p.pace}/km — ${p.note}`).join('\n')}
-
-─── PIANO NUTRIZIONE ────────────────────────────
-${GEL_PLAN.map((g,i) => `${i+1}. ${g.when}: ${g.type} (${g.note})`).join('\n')}
-Idratazione: sempre acqua con ogni gel.
-
-─── ULTIMO LUNGO SIGNIFICATIVO ──────────────────
-${stravaInsights ? stravaInsights.lastLongStr : `${LONG_RUN_LAST.distance}km in ${LONG_RUN_LAST.time} (${LONG_RUN_LAST.pace}), FC media ${LONG_RUN_LAST.avgHR}.`}
-
-─── DATI STRAVA LIVE (ultimi 60 giorni) ─────────
-${stravaInsights ? `Attività totali importate: ${stravaInsights.totalActs}
-Volume ultimi 14 gg: ${stravaInsights.km14} km
-Media settimanale (4 sett): ${stravaInsights.avgWeeklyKm} km
-Corse ultime 4 settimane: ${stravaInsights.runs28}
-Forma attuale: CTL ${stravaInsights.ctl} · ATL ${stravaInsights.atl} · TSB ${stravaInsights.tsb >= 0 ? '+' : ''}${stravaInsights.tsb} (${stravaInsights.form})
-
-Ultime corse:
-${stravaInsights.recent}` : '⚠ Strava non collegato o nessuna attività disponibile — basa i suggerimenti sui PB e sulle informazioni che l\'utente ti dà.'}
-
-─── STATO ATTUALE ───────────────────────────────
-Settimana ${USER.currentWeek} di ${USER.weeksTotal} — FASE TAPER/scarico
-Recupero stimato: ${RECOVERY_DATA.score}/100
-Allenamento di oggi (suggerito dal piano): ${TODAY_WORKOUT.title} — ${TODAY_WORKOUT.distance}km @ ${TODAY_WORKOUT.targetPace}
-Dispositivo: Garmin ${USER.garminDevice}
-
-Rispondi SEMPRE in italiano. Sii coach vero, concreto, sicuro.
-
-─── GENERAZIONE ALLENAMENTI ─────────────────────
-Se l'utente ti chiede un allenamento, o se dai feedback sulle sue sensazioni/dati ti spinge a proporne uno nuovo, DEVI includere nella risposta un blocco JSON tra i marker \`\`\`workout e \`\`\` con questa struttura ESATTA:
-
-\`\`\`workout
-{
-  "title": "Nome breve dell'allenamento",
-  "type": "easy|tempo|intervals|long|recovery",
-  "distance_km": 6.5,
-  "duration_min": 42,
-  "target_pace": "5:40/km",
-  "rpe": "6/10",
-  "hr_zone": "Zona 2-3",
-  "warmup":   { "duration": "10 min", "desc": "Jogging lento + 4 allunghi", "pace": "6:30/km" },
-  "main_set": { "duration": "22 min", "desc": "3×1km @ 5:30 con 1' rec.", "pace": "5:30/km" },
-  "cooldown": { "duration": "10 min", "desc": "Defaticamento cammino+jogging", "pace": "6:45/km" },
-  "note": "Perché questo allenamento ORA (1-2 frasi, contestualizzato)",
-  "alt_easier": "Versione ridotta se stanco"
+  const base = presets[w.type] || presets.easy;
+  return {
+    ...base,
+    day: dayLabel,
+    garminSent: false,
+  };
 }
-\`\`\`
 
-Regole per generare allenamenti:
-- Coerenti con la fase attuale del piano (siamo nella settimana ${USER.currentWeek}/${USER.weeksTotal} verso ${race.name})
-- BASATI SUI DATI STRAVA REALI mostrati sopra (CTL/ATL/TSB, ultime corse, ritmi reali, FC reale)
-- Adatta intensità a TSB: se < -15 proponi recupero/easy, se > +5 puoi inserire qualità
-- Se mancano X giorni alla gara (X = ${race.days}), comportati così:
-  • > 21gg: build (volume + qualità mista)
-  • 14-21gg: peak (lavori specifici a ritmo gara)
-  • 7-14gg: pre-taper (qualità ridotta, mantieni stimolo)
-  • ≤ 7gg: taper (solo attivazioni brevi, niente carico)
-- Ritmi compatibili con quelli osservati nelle ultime corse (non inventare ritmi più veloci di quelli che l'atleta corre già)
-- Prima del JSON, scrivi SEMPRE una breve spiegazione (2-4 frasi) del RAZIONALE: "guardando le tue ultime corse... il TSB di X mi dice... quindi oggi ti propongo..."
-- Dopo il JSON, nessun altro testo.
+const TODAY_WORKOUT = _buildTodayWorkout();
 
-PIANO SETTIMANALE
-Se l'utente chiede "il piano della settimana" o "cosa devo fare questa settimana", proponi 3 allenamenti distribuiti (es. martedì qualità, giovedì medio, domenica lungo) tenendo conto dei dati Strava degli ultimi 14 giorni. Per ogni giorno inserisci un blocco \`\`\`workout separato.
+const TYPE_META = {
+  tempo:     { color: C.orange,  label: 'TEMPO',     bg: C.orangeDim  },
+  easy:      { color: C.teal,    label: 'FACILE',    bg: C.tealDim    },
+  intervals: { color: C.purple,  label: 'RIPETUTE',  bg: C.purpleDim  },
+  long:      { color: C.blue,    label: 'LUNGO',     bg: C.blueDim    },
+  recovery:  { color: C.teal,    label: 'RECUPERO',  bg: C.tealDim    },
+  strength:  { color: C.yellow,  label: 'FORZA',     bg: 'rgba(246,201,78,0.14)' },
+  rest:      { color: C.faint,   label: 'RIPOSO',    bg: 'rgba(255,255,255,0.05)' },
+};
 
-Ora la persona ti scrive: ascolta e rispondi.`;
+const PROGRESS_DATA = {
+  weeklyMiles:    [38, 42, 45, 48, 44, 50, 22],
+  weekLabels:     ['S9','S10','S11','S12','S13','S14','S15'],
+  paceHistory:    [6.2, 6.05, 5.95, 5.88, 5.82, 5.78, 5.80],
+  consistency:    91,
+  adherence:      88,
+  longestRun:     32,
+  totalRuns:      43,
+  projectedFinish:'In taper',
+  readinessScore: 84,
+  raceCountdown:  DAYS_TO_RACE,
+};
 
-  const send = async (text) => {
-    if (!text.trim()) return;
-    setInput('');
-    setMessages(p => [...p, { role:'user', text:text.trim() }]);
-    setTyping(true);
+const CHAT_HISTORY = [
+  { role: 'coach', text: `Buongiorno Sarah! Oggi è ${USER.todayLabel} ${USER.todayDate} — siamo a ${DAYS_TO_RACE} giorni dalla Mezza Maratona di Lucca 🏁 Siamo in pieno taper: tre uscite leggere questa settimana, zero lavori di qualità oltre l'attivazione. Il lavoro è già fatto, ora si conserva.` },
+  { role: 'user',  text: `Ho le gambe pesanti, è normale a ${DAYS_TO_RACE} giorni dalla gara?` },
+  { role: 'coach', text: "Assolutamente sì — è normalissimo durante lo scarico. Le gambe si 'rigenerano' e spesso si sentono pesanti prima di tornare fresche. Non cambiare niente al piano. Idratati bene, dormi 8h, e fidati del processo: arriverai a Lucca con le gambe cariche." },
+];
 
-    if (useRealAI) {
-      try {
-        const systemPrompt = buildSystemContext();
-        const history = messages
-          .filter(m => m.text && m.text.trim())
-          .slice(-10)
-          .map(m => ({
-            role: m.role === 'user' ? 'user' : 'assistant',
-            content: m.text,
-          }));
-        const reply = await callCoachAI({
-          system: systemPrompt,
-          messages: [
-            ...history,
-            { role: 'user', content: text.trim() },
-          ],
-        });
-        setTyping(false);
-        const parsed = parseWorkoutBlock(String(reply).trim());
-        setMessages(p => [...p, { role:'coach', text: parsed.cleanText || 'Ecco il tuo allenamento:', workout: parsed.workout }]);
-        return;
-      } catch (err) {
-        console.error('Coach AI error', err);
-        setTyping(false);
-        const msg = (err && err.message) ? err.message : 'errore sconosciuto';
-        setMessages(p => [...p, { role:'coach', text:'Problema nella connessione con l\'AI (' + msg + '). Riprova tra un attimo.' }]);
-        return;
-      }
-    }
+const SUGGESTIONS = [
+  "Pianifica i miei allenamenti della prossima settimana",
+  "Analizza le mie ultime corse Strava",
+  "Dammi un allenamento per oggi",
+  "Come sono le mie metriche (CTL/ATL/TSB)?",
+  "Sono stanco, propongo qualcosa di più leggero",
+  "Che obiettivo posso pormi adesso?",
+];
 
-    // Fallback risposte preimpostate
-    setTimeout(() => {
-      const reply = COACH_RESPONSES[text.trim()] || "Basandomi sui tuoi dati: sei in taper con recupero buono. Mantieni consistenza, non aggiungere volume, idratati e dormi bene. Lucca è vicina.";
-      setTyping(false);
-      setMessages(p => [...p, { role:'coach', text:reply }]);
-    }, 1400);
-  };
+const COACH_RESPONSES = {
+  "Che tempo posso fare a Lucca?": `Guardando i tuoi PB: 10k in 51:03 e 21k in 2:03:00. La formula di Riegel dal 10k ti dà una stima di circa ${RACE_ESTIMATES.realistic.time} (${RACE_ESTIMATES.realistic.pace}). Il target 1:58 è realistico ma ambizioso: gestendo bene i primi 10k (5:40-5:45/km) e tenendo duro nella seconda metà, è alla portata.`,
+  "Come gestisco il ritmo in gara?": "Dividi i 21km in 3 blocchi: km 1-7 conservativa (5:40-5:45/km, controllata), km 7-15 al ritmo gara (5:35/km), km 15-21 dai tutto se hai energie. Parti SEMPRE più lenta di quanto vorresti: chi parte forte a Lucca muore nel finale. Usa il GPS ma ascolta il respiro.",
+  "Cosa mangio nei giorni pre-gara?": "Nei 3 giorni prima: carboidrati ad ogni pasto (pasta, riso, pane), riduci fibre e grassi, niente cibi nuovi. Sera del 2 maggio: pasta semplice col pomodoro, porzione normale. Mattina gara 3h prima: porridge con banana o toast con marmellata + 400ml acqua. Niente esperimenti!",
+  "Come arrivo riposata il 3 maggio?": "Sei già in taper, fallo bene: dormi 8h minime, idratati (2-3L/giorno), evita stress fisici (niente sport diversi), riduci caffè la settimana. Le 3 corse leggere di questa settimana bastano a tenere le gambe attive. Venerdì riposo totale, sabato solo sblocca-gambe 4km lento.",
+  "Devo fare un ultimo lungo?": "No. A 11 giorni dalla gara non serve un lungo: la condizione è costruita, ora la conservi. Il lungo massimo fatto (18km) è sufficiente per i 21.1km di Lucca. Fare di più ora rischia solo di affaticare le gambe. Fidati del taper.",
+};
 
+const COACH_RESPONSES_OLD_UNUSED = {
+
+  "Cosa mangio nei giorni pre-gara?": "Nei 3 giorni prima di Lucca: aumenta i carboidrati (pasta, riso, pane) ad ogni pasto, riduci fibre e grassi, niente cibi nuovi. La sera del 2 maggio: pasta semplice con pomodoro. Mattina gara: colazione 3h prima — porridge con banana o toast con marmellata, 400-500ml acqua. Niente di sperimentale!",
+  "Devo fare carbo-loading?": "Sì, per una maratona il carbo-loading ha senso. Inizia 3 giorni prima (dal 30 aprile): punta a 8-10g di carboidrati per kg corporeo al giorno. In pratica: aggiungi una porzione extra di pasta/riso a pranzo e cena, riduci le verdure crude, mantieni le proteine moderate. Non esagerare la sera prima — stomaco pesante = gara pesante.",
+  "Posso aggiungere un allenamento?": "No — è esattamente la cosa sbagliata da fare ora. A 11 giorni dalla gara aggiungere km non ti migliorerà, ma rischi di arrivare stanca a Lucca. La forma che hai è quella che hai: il taper fa emergere tutta la condizione costruita nelle settimane precedenti. Fidati del piano e riposa.",
+  "Come arrivo riposata il 3 maggio?": "Piano settimana pre-gara: Lun 27 riposo, Mar 28 jogging 4km, Mer 29 riposo, Gio 30 jogging 3km + 4×100m allunghi, Ven 1 maggio riposo, Sab 2 maggio jogging 15 min leggero. Dormi 8h per notte, idratati bene dal 30 aprile, evita alcol e cibi pesanti. Il giorno prima: gambe su, niente gite lunghe a piedi!",
+};
+
+// ─── Shared components ────────────────────────────────────────────────────────
+
+function PhoneFrame({ children, accentColor }) {
   return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      {/* Header */}
-      <div style={{ padding:'8px 20px 12px', flexShrink:0 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-          <div style={{ width:48, height:48, borderRadius:24, background:`linear-gradient(135deg, ${accent}, ${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', position:'relative', flexShrink:0 }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 5.92 2 10.8c0 2.96 1.56 5.6 4 7.28V22l3.6-2.4c.76.24 1.56.4 2.4.4 5.52 0 10-3.92 10-9.2S17.52 2 12 2z" fill="white" opacity="0.9"/></svg>
-            <div style={{ position:'absolute', bottom:2, right:2, width:12, height:12, borderRadius:6, background:C.teal, border:'2px solid #06060E' }}/>
-          </div>
-          <div style={{ flex:1 }}>
-            <div style={{ color:C.text, fontSize:18, fontWeight:700 }}>Coach AI</div>
-            <div style={{ color:C.teal, fontSize:12, fontWeight:500 }}>
-              ● Online · {useRealAI ? 'Gemini AI' : 'Risposte preimpostate'}
-              {stravaActs && stravaActs.length > 0 && (
-                <span style={{ color:C.sub, marginLeft:6 }}>· 📊 {stravaActs.length} corse analizzate</span>
-              )}
-              {stravaActs && stravaActs.length === 0 && auth && (
-                <span style={{ color:'#fb923c', marginLeft:6 }}>· ⚠ no dati Strava</span>
-              )}
-              {stravaActs === null && auth && (
-                <span style={{ color:C.sub, marginLeft:6 }}>· caricamento Strava…</span>
-              )}
-            </div>
-          </div>
-          {onNav && (
-            <button onClick={() => onNav('race-settings')} title="Impostazioni gara" style={{ width:38, height:38, borderRadius:19, background:C.card2, border:`1px solid ${C.border2}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            </button>
-          )}
-          {useRealAI && (
-            <div style={{ background:`${accent}22`, border:`1px solid ${accent}44`, color:accent, fontSize:10, fontWeight:700, padding:'4px 8px', borderRadius:6, letterSpacing:'0.05em' }}>LIVE</div>
-          )}
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div data-scroll="1" style={{ flex:1, overflowY:'auto', scrollbarWidth:'none', padding:'0 16px' }}>
-        {messages.map((m,i)=>(
-          <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start', marginBottom:14 }}>
-            {m.role==='coach' && (
-              <div style={{ width:32, height:32, borderRadius:16, background:`linear-gradient(135deg, ${accent}, ${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginRight:8, marginTop:2 }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 5.92 2 10.8c0 2.96 1.56 5.6 4 7.28V22l3.6-2.4c.76.24 1.56.4 2.4.4 5.52 0 10-3.92 10-9.2S17.52 2 12 2z"/></svg>
-              </div>
-            )}
-            <div style={{ maxWidth:'78%', background:m.role==='user'?accent:C.card2, border:m.role==='user'?'none':`1px solid ${C.border2}`, borderRadius:m.role==='user'?'18px 18px 4px 18px':'4px 18px 18px 18px', padding:'12px 16px' }}>
-              <p style={{ color:C.text, fontSize:14, lineHeight:1.6, margin:0, whiteSpace:'pre-wrap' }}>{m.text}</p>
-              {m.workout && (
-                <div style={{ marginTop:12, background:'rgba(0,0,0,0.25)', border:`1px solid ${accent}55`, borderRadius:14, padding:'12px 14px' }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
-                    <span style={{ fontSize:14 }}>🏃</span>
-                    <span style={{ color:accent, fontSize:10, fontWeight:800, letterSpacing:'0.08em' }}>ALLENAMENTO GENERATO</span>
-                  </div>
-                  <div style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:2 }}>{m.workout.title}</div>
-                  <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:8, marginBottom:10 }}>
-                    {m.workout.distance_km && <span style={{ background:'rgba(255,255,255,0.08)', color:C.text, fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:6 }}>{m.workout.distance_km} km</span>}
-                    {m.workout.duration_min && <span style={{ background:'rgba(255,255,255,0.08)', color:C.text, fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:6 }}>{m.workout.duration_min} min</span>}
-                    {m.workout.target_pace && <span style={{ background:`${accent}22`, color:accent, fontSize:11, fontWeight:700, padding:'3px 8px', borderRadius:6 }}>{m.workout.target_pace}</span>}
-                    {m.workout.rpe && <span style={{ background:'rgba(255,255,255,0.08)', color:C.sub, fontSize:11, padding:'3px 8px', borderRadius:6 }}>RPE {m.workout.rpe}</span>}
-                  </div>
-                  {['warmup','main_set','cooldown'].map(k => m.workout[k] && (
-                    <div key={k} style={{ borderLeft:`2px solid ${k==='main_set'?accent:C.teal}`, paddingLeft:10, marginBottom:8 }}>
-                      <div style={{ color:C.text, fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.05em' }}>
-                        {k==='warmup'?'Riscaldamento':k==='main_set'?'Parte centrale':'Defaticamento'} · {m.workout[k].duration}
-                      </div>
-                      <div style={{ color:C.sub, fontSize:11, lineHeight:1.45, marginTop:2 }}>{m.workout[k].desc}</div>
-                    </div>
-                  ))}
-                  {m.workout.note && <div style={{ color:C.faint, fontSize:11, fontStyle:'italic', marginTop:6, lineHeight:1.45 }}>💡 {m.workout.note}</div>}
-                  <div style={{ display:'flex', gap:6, marginTop:10 }}>
-                    <button onClick={() => alert('Workout salvato nel piano ✓')} style={{ flex:1, background:accent, border:'none', borderRadius:8, color:'white', fontSize:11, fontWeight:700, padding:'8px', cursor:'pointer' }}>+ Piano</button>
-                    <button onClick={() => alert('Inviato a Garmin ✓')} style={{ flex:1, background:'rgba(255,255,255,0.08)', border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:11, fontWeight:600, padding:'8px', cursor:'pointer' }}>↗ Garmin</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {typing && (
-          <div style={{ display:'flex', justifyContent:'flex-start', marginBottom:14 }}>
-            <div style={{ width:32, height:32, borderRadius:16, background:`linear-gradient(135deg, ${accent}, ${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginRight:8 }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 5.92 2 10.8c0 2.96 1.56 5.6 4 7.28V22l3.6-2.4c.76.24 1.56.4 2.4.4 5.52 0 10-3.92 10-9.2S17.52 2 12 2z"/></svg>
-            </div>
-            <div style={{ background:C.card2, border:`1px solid ${C.border2}`, borderRadius:'4px 18px 18px 18px', padding:'12px 18px', display:'flex', gap:6, alignItems:'center' }}>
-              {[0,1,2].map(j=><div key={j} style={{ width:7, height:7, borderRadius:4, background:C.sub, animation:`bounce 1s ${j*0.2}s infinite` }}/>)}
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef}/>
-      </div>
-
-      {/* Suggestions */}
-      <div style={{ padding:'8px 16px 6px', flexShrink:0 }}>
-        <div style={{ display:'flex', gap:7, overflowX:'auto', scrollbarWidth:'none', paddingBottom:2 }}>
-          {SUGGESTIONS.map((s,i)=>(
-            <button key={i} onClick={()=>send(s)} style={{ flexShrink:0, background:C.card2, border:`1px solid ${C.border2}`, borderRadius:22, padding:'8px 14px', color:C.sub, fontSize:12, fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>{s}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Input */}
-      <div style={{ padding:'6px 14px 10px', flexShrink:0, display:'flex', gap:8 }}>
-        <input value={input} onChange={e=>setInput(e.target.value)}
-          onKeyDown={e=>e.key==='Enter'&&send(input)}
-          placeholder="Chiedi qualcosa al tuo coach..."
-          style={{ flex:1, height:50, background:C.card2, border:`1px solid ${C.border2}`, borderRadius:25, padding:'0 20px', color:C.text, fontSize:14, outline:'none', fontFamily:'DM Sans,sans-serif' }}/>
-        <button onClick={()=>send(input)} style={{ width:50, height:50, borderRadius:25, background:accent, border:'none', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 4px 14px ${accent}44`, flexShrink:0 }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
-        </button>
-      </div>
-      <style>{`@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}`}</style>
-    </div>
-  );
-}
-
-// ─── Progress ─────────────────────────────────────────────────────────────────
-function ProgressScreenM({ tweaks }) {
-  const accent = tweaks.accentColor || C.orange;
-  const p = PROGRESS_DATA;
-  return (
-    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
-      <div style={{ padding:'8px 20px 14px' }}>
-        <div style={{ color:C.sub, fontSize:13, marginBottom:2 }}>Progressi</div>
-        <div style={{ color:C.text, fontSize:22, fontWeight:700, letterSpacing:'-0.4px' }}>Il Tuo Percorso</div>
-      </div>
-
-      {/* Readiness hero */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <div style={{ background:`linear-gradient(135deg, ${accent}20, ${C.purple}14)`, border:`1px solid ${accent}33`, borderRadius:20, padding:'20px 20px' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-            <div>
-              <div style={{ color:C.sub, fontSize:11, fontWeight:500, letterSpacing:'0.06em', marginBottom:8 }}>PRONTEZZA GARA</div>
-              <div style={{ color:C.text, fontSize:48, fontWeight:800, letterSpacing:'-1px', lineHeight:1 }}>{p.readinessScore}<span style={{ fontSize:20, color:C.sub, fontWeight:500 }}>%</span></div>
-              <div style={{ color:C.sub, fontSize:13, marginTop:8 }}>Arrivo previsto <span style={{ color:accent, fontWeight:600 }}>{p.projectedFinish}</span></div>
-            </div>
-            <div style={{ textAlign:'right' }}>
-              <div style={{ color:accent, fontSize:32, fontWeight:800 }}>{p.raceCountdown}</div>
-              <div style={{ color:C.sub, fontSize:12 }}>giorni a Lucca</div>
-            </div>
-          </div>
-          <div style={{ marginTop:18, height:6, background:'rgba(255,255,255,0.1)', borderRadius:3 }}>
-            <div style={{ height:'100%', width:`${p.readinessScore}%`, background:`linear-gradient(90deg, ${accent}, ${C.yellow})`, borderRadius:3 }}/>
-          </div>
-          <div style={{ display:'flex', justifyContent:'space-between', marginTop:5 }}>
-            <span style={{ color:C.faint, fontSize:11 }}>Non pronta</span>
-            <span style={{ color:C.faint, fontSize:11 }}>Pronta</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div style={{ padding:'0 14px 14px', display:'flex', gap:8 }}>
-        {[{label:'Costanza',val:`${p.consistency}%`,sub:'Ultime 4 settimane',color:C.teal},{label:'Aderenza',val:`${p.adherence}%`,sub:'Sessioni eseguite',color:accent},{label:'Corse Totali',val:`${p.totalRuns}`,sub:'Questo ciclo',color:C.blue}].map(s=>(
-          <Card key={s.label} style={{ flex:1, cursor:'default' }}>
-            <div style={{ padding:'14px 12px', textAlign:'center' }}>
-              <div style={{ color:s.color, fontSize:22, fontWeight:800 }}>{s.val}</div>
-              <div style={{ color:C.text, fontSize:12, fontWeight:600, marginTop:3 }}>{s.label}</div>
-              <div style={{ color:C.faint, fontSize:10, marginTop:2 }}>{s.sub}</div>
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      {/* Weekly mileage */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <Card style={{ cursor:'default' }}>
-          <div style={{ padding:'16px' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-              <div style={{ color:C.text, fontSize:15, fontWeight:600 }}>Chilometraggio Settimanale</div>
-              <div style={{ color:C.sub, fontSize:13 }}>Questa sett. <span style={{ color:accent, fontWeight:700 }}>{p.weeklyMiles[p.weeklyMiles.length-1]} km</span></div>
-            </div>
-            <BarChart data={p.weeklyMiles} labels={p.weekLabels} color={accent} height={64}/>
-          </div>
-        </Card>
-      </div>
-
-      {/* Pace trend */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <Card style={{ cursor:'default' }}>
-          <div style={{ padding:'16px' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-              <div style={{ color:C.text, fontSize:15, fontWeight:600 }}>Tendenza Ritmo</div>
-              <div style={{ color:C.teal, fontSize:12, fontWeight:600 }}>↓ In miglioramento</div>
-            </div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
-              <div>
-                <div style={{ color:C.faint, fontSize:11, marginBottom:4 }}>7 sett. fa</div>
-                <div style={{ color:C.sub, fontSize:17, fontWeight:700 }}>6:06/km</div>
-              </div>
-              <SparkLine data={p.paceHistory.map(v=>-v)} color={C.teal} width={140} height={40}/>
-              <div style={{ textAlign:'right' }}>
-                <div style={{ color:C.faint, fontSize:11, marginBottom:4 }}>Questa sett.</div>
-                <div style={{ color:C.teal, fontSize:17, fontWeight:700 }}>5:43/km</div>
-              </div>
-            </div>
-            <div style={{ color:C.faint, fontSize:12, marginTop:8 }}>−23 sec/km in 7 settimane</div>
-          </div>
-        </Card>
-      </div>
-
-      {/* Long run progress */}
-      <div style={{ padding:'0 14px 24px' }}>
-        <Card style={{ cursor:'default' }}>
-          <div style={{ padding:'16px' }}>
-            <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:14 }}>Progressione del Lungo</div>
-            <div style={{ display:'flex', gap:4, alignItems:'flex-end', height:64 }}>
-              {[22,26,28,30,32,28,14].map((km,i)=>(
-                <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
-                  <div style={{ width:'100%', height:(km/32)*56, background:i===6?C.blue:'rgba(77,158,255,0.25)', borderRadius:'4px 4px 0 0', minHeight:4 }}/>
-                  <div style={{ color:C.faint, fontSize:10 }}>{km}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ color:C.faint, fontSize:12, marginTop:4 }}>km per lungo · Gara: 42.195km il 3 maggio</div>
-          </div>
-        </Card>
+    <div style={{
+      position: 'relative',
+      width: 393,
+      height: 852,
+      background: '#000',
+      borderRadius: 52,
+      overflow: 'hidden',
+      boxShadow: '0 40px 120px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.12), inset 0 0 0 1px rgba(255,255,255,0.05)',
+      flexShrink: 0,
+    }}>
+      {/* Bezel gradient */}
+      <div style={{ position:'absolute', inset:0, background:'linear-gradient(135deg, rgba(255,255,255,0.04) 0%, transparent 50%)', pointerEvents:'none', zIndex:100, borderRadius:52 }} />
+      <div style={{ position:'absolute', inset:0, background: C.bg, display:'flex', flexDirection:'column' }}>
+        {children}
       </div>
     </div>
   );
 }
 
-// ─── Recovery ─────────────────────────────────────────────────────────────────
-function RecoveryScreenM({ tweaks }) {
-  const accent = tweaks.accentColor || C.orange;
-  const rec = { ...RECOVERY_DATA, score: tweaks.recoveryScore ?? RECOVERY_DATA.score };
-  const recColor = rec.score >= 80 ? C.teal : rec.score >= 60 ? accent : '#FF4466';
-  const recLabel = rec.score >= 80 ? 'Eccellente' : rec.score >= 60 ? 'Buono' : 'Basso';
-  const recId = rec.score >= 80 ? 'go_as_planned' : rec.score >= 60 ? 'go_as_planned' : rec.score >= 45 ? 'reduce' : 'rest';
+function DynamicIsland() {
+  return (
+    <div style={{ display:'flex', justifyContent:'center', paddingTop: 14, paddingBottom: 4, flexShrink: 0 }}>
+      <div style={{ width: 120, height: 34, background: '#000', borderRadius: 20 }} />
+    </div>
+  );
+}
 
-  const RECS = [
-    { id:'go_as_planned', icon:'✅', label:'Vai come Previsto',   desc:'Il recupero è sufficiente. Esegui l\'allenamento pianificato.' },
-    { id:'reduce',        icon:'⬇',  label:'Riduci Intensità',    desc:'Sostituisci la sessione di oggi con la versione più facile.' },
-    { id:'easy_only',     icon:'🚶', label:'Solo Corsa Facile',   desc:'Solo Zona 1–2, massimo 20–30 min.' },
-    { id:'rest',          icon:'🛌', label:'Riposo / Mobilità',   desc:'Riposo completo o solo lavoro di mobilità leggera.' },
+function StatusBar({ time = '9:41' }) {
+  return (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0 28px 6px', flexShrink:0 }}>
+      <span style={{ color: C.text, fontSize: 15, fontWeight: 600, letterSpacing: '-0.3px' }}>{time}</span>
+      <div style={{ display:'flex', gap: 6, alignItems:'center' }}>
+        {/* Signal */}
+        <svg width="17" height="12" viewBox="0 0 17 12"><rect x="0" y="6" width="3" height="6" rx="0.5" fill={C.text}/><rect x="4.5" y="4" width="3" height="8" rx="0.5" fill={C.text}/><rect x="9" y="2" width="3" height="10" rx="0.5" fill={C.text}/><rect x="13.5" y="0" width="3" height="12" rx="0.5" fill={C.text}/></svg>
+        {/* WiFi */}
+        <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 9.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" fill={C.text}/><path d="M2.5 6.5a7.5 7.5 0 0111 0" stroke={C.text} strokeWidth="1.5" strokeLinecap="round" fill="none"/><path d="M5 3.5a5 5 0 016 0" stroke={C.text} strokeWidth="1.5" strokeLinecap="round" fill="none"/></svg>
+        {/* Battery */}
+        <div style={{ display:'flex', alignItems:'center', gap:1 }}>
+          <div style={{ width:24, height:12, border:`1.5px solid ${C.text}`, borderRadius:3, padding:1.5, display:'flex', alignItems:'center' }}>
+            <div style={{ width:'80%', height:'100%', background: C.text, borderRadius:1.5 }} />
+          </div>
+          <div style={{ width:2, height:5, background: C.text, borderRadius:'0 1px 1px 0', marginLeft:-1 }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BottomNav({ current, onChange }) {
+  const tabs = [
+    { id:'home',     icon: HomeIcon,     label:'Today'    },
+    { id:'plan',     icon: PlanIcon,     label:'Plan'     },
+    { id:'coach',    icon: CoachIcon,    label:'Coach'    },
+    { id:'progress', icon: ProgressIcon, label:'Progress' },
+    { id:'recovery', icon: RecoveryIcon, label:'Recovery' },
   ];
-
   return (
-    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
-      <div style={{ padding:'8px 20px 14px' }}>
-        <div style={{ color:C.sub, fontSize:13, marginBottom:2 }}>Recupero e Prontezza</div>
-        <div style={{ color:C.text, fontSize:22, fontWeight:700, letterSpacing:'-0.4px' }}>Stato Odierno</div>
-      </div>
+    <div style={{
+      display:'flex', justifyContent:'space-around', alignItems:'center',
+      padding:'10px 4px 24px', background: C.card,
+      borderTop:`1px solid ${C.border}`, flexShrink:0,
+    }}>
+      {tabs.map(t => {
+        const active = current === t.id;
+        const Icon = t.icon;
+        return (
+          <button key={t.id} onClick={() => onChange(t.id)} style={{
+            display:'flex', flexDirection:'column', alignItems:'center', gap:4,
+            background:'none', border:'none', cursor:'pointer', padding:'4px 12px',
+            transition:'opacity 0.15s',
+          }}>
+            <Icon active={active} />
+            <span style={{ fontSize:10, fontWeight: active ? 600 : 400, color: active ? C.orange : C.faint, letterSpacing:'0.02em' }}>{t.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
-      {/* Big score */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <Card style={{ cursor:'default', background:`linear-gradient(135deg, ${recColor}12, #0D0D1C)` }}>
-          <div style={{ padding:'24px 20px', display:'flex', alignItems:'center', gap:20 }}>
-            <div style={{ position:'relative', width:100, height:100, flexShrink:0 }}>
-              <RecoveryRing score={rec.score} size={100} stroke={8}/>
-              <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
-                <div style={{ color:recColor, fontSize:28, fontWeight:800, lineHeight:1 }}>{rec.score}</div>
-                <div style={{ color:C.faint, fontSize:10, marginTop:1 }}>/ 100</div>
-              </div>
-            </div>
-            <div>
-              <div style={{ color:recColor, fontSize:22, fontWeight:700, marginBottom:6 }}>{recLabel}</div>
-              <div style={{ color:C.sub, fontSize:13, lineHeight:1.55, marginBottom:10 }}>Basato su sonno, HRV, frequenza cardiaca a riposo e carico.</div>
-              <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:C.blueDim, border:`1px solid ${C.blue}33`, borderRadius:8, padding:'5px 10px' }}>
-                <div style={{ width:6, height:6, borderRadius:3, background:C.blue }}/>
-                <span style={{ color:C.blue, fontSize:11, fontWeight:500 }}>Garmin · {USER.garminSyncAgo}</span>
-              </div>
-            </div>
-          </div>
-        </Card>
-      </div>
+// Nav icons
+function HomeIcon({ active }) {
+  return <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <path d="M3 12L12 3L21 12V20C21 20.55 20.55 21 20 21H15V16H9V21H4C3.45 21 3 20.55 3 20V12Z" stroke={active ? C.orange : C.faint} strokeWidth="1.75" strokeLinejoin="round" fill={active ? C.orangeDim : 'none'}/>
+  </svg>;
+}
+function PlanIcon({ active }) {
+  return <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <rect x="3" y="4" width="18" height="17" rx="3" stroke={active ? C.orange : C.faint} strokeWidth="1.75" fill={active ? C.orangeDim : 'none'}/>
+    <path d="M3 9H21" stroke={active ? C.orange : C.faint} strokeWidth="1.75"/>
+    <path d="M8 2V6M16 2V6" stroke={active ? C.orange : C.faint} strokeWidth="1.75" strokeLinecap="round"/>
+    <path d="M7 14H9M11 14H13M15 14H17M7 17H9M11 17H13" stroke={active ? C.orange : C.faint} strokeWidth="1.75" strokeLinecap="round"/>
+  </svg>;
+}
+function CoachIcon({ active }) {
+  return <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <path d="M12 2C6.48 2 2 5.92 2 10.8C2 13.76 3.56 16.4 6 18.08V22L9.6 19.6C10.36 19.84 11.16 20 12 20C17.52 20 22 16.08 22 10.8S17.52 2 12 2Z" stroke={active ? C.orange : C.faint} strokeWidth="1.75" fill={active ? C.orangeDim : 'none'}/>
+    <circle cx="8" cy="11" r="1.2" fill={active ? C.orange : C.faint}/>
+    <circle cx="12" cy="11" r="1.2" fill={active ? C.orange : C.faint}/>
+    <circle cx="16" cy="11" r="1.2" fill={active ? C.orange : C.faint}/>
+  </svg>;
+}
+function ProgressIcon({ active }) {
+  return <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <path d="M3 17L8 11L13 14L19 6" stroke={active ? C.orange : C.faint} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+    <path d="M20 6H15M20 6V11" stroke={active ? C.orange : C.faint} strokeWidth="1.75" strokeLinecap="round"/>
+    <path d="M3 21H21" stroke={active ? C.faint : C.faint} strokeWidth="1.5" strokeLinecap="round" opacity="0.4"/>
+  </svg>;
+}
+function RecoveryIcon({ active }) {
+  return <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2Z" stroke={active ? C.orange : C.faint} strokeWidth="1.75" fill={active ? C.orangeDim : 'none'}/>
+    <path d="M8 12L10.5 14.5L16 9" stroke={active ? C.orange : C.faint} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>;
+}
 
-      {/* Garmin metrics */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:10 }}>Metriche Garmin</div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-          {[
-            { label:'HRV', val:`${rec.hrv} ms`, trend:'↑ +4', good:true, icon:'💓' },
-            { label:'FC a Riposo', val:`${rec.restingHR} bpm`, trend:'→ stabile', good:null, icon:'❤' },
-            { label:'Sonno', val:`${rec.sleep}h`, trend:rec.sleepQuality, good:true, icon:'🌙' },
-            { label:'Carico Allena.', val:rec.trainingLoad, trend:'Gestibile', good:true, icon:'⚡' },
-          ].map(m=>(
-            <Card key={m.label} style={{ cursor:'default' }}>
-              <div style={{ padding:'16px' }}>
-                <div style={{ fontSize:20, marginBottom:8 }}>{m.icon}</div>
-                <div style={{ color:C.text, fontSize:17, fontWeight:700 }}>{m.val}</div>
-                <div style={{ color:C.faint, fontSize:12, marginTop:2 }}>{m.label}</div>
-                <div style={{ color:m.good===true?C.teal:m.good===false?'#FF6450':C.sub, fontSize:12, fontWeight:500, marginTop:4 }}>{m.trend}</div>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>
+// Reusable card
+function Card({ children, style, onClick }) {
+  return (
+    <div onClick={onClick} style={{
+      background: C.card, border: `1px solid ${C.border}`,
+      borderRadius: 16, overflow:'hidden',
+      transition: onClick ? 'transform 0.1s, background 0.15s' : undefined,
+      cursor: onClick ? 'pointer' : 'default',
+      ...style,
+    }} onMouseDown={onClick ? e => e.currentTarget.style.transform='scale(0.98)' : undefined}
+       onMouseUp={onClick ? e => e.currentTarget.style.transform='scale(1)' : undefined}
+       onMouseLeave={onClick ? e => e.currentTarget.style.transform='scale(1)' : undefined}>
+      {children}
+    </div>
+  );
+}
 
-      {/* Recommendation */}
-      <div style={{ padding:'0 14px 14px' }}>
-        <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:10 }}>Raccomandazione Odierna</div>
-        {RECS.map(r=>{
-          const isActive = r.id===recId;
-          return (
-            <div key={r.id} style={{ display:'flex', alignItems:'center', gap:14, background:isActive?`${recColor}18`:'rgba(255,255,255,0.04)', border:`1px solid ${isActive?`${recColor}44`:C.border}`, borderRadius:16, padding:'14px 16px', marginBottom:8 }}>
-              <div style={{ width:40, height:40, borderRadius:20, background:isActive?`${recColor}22`:'rgba(255,255,255,0.05)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, flexShrink:0 }}>{r.icon}</div>
-              <div style={{ flex:1 }}>
-                <div style={{ color:isActive?recColor:C.sub, fontSize:14, fontWeight:isActive?700:500 }}>{r.label}</div>
-                <div style={{ color:C.faint, fontSize:12, marginTop:3, lineHeight:1.45 }}>{r.desc}</div>
-              </div>
-              {isActive && <div style={{ width:8, height:8, borderRadius:4, background:recColor, flexShrink:0 }}/>}
-            </div>
-          );
-        })}
-      </div>
+// Recovery ring
+function RecoveryRing({ score, size = 80, stroke = 8 }) {
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const pct = score / 100;
+  const color = score >= 80 ? C.teal : score >= 60 ? C.orange : '#FF4466';
+  return (
+    <svg width={size} height={size} style={{ transform:'rotate(-90deg)' }}>
+      <circle cx={size/2} cy={size/2} r={r} stroke="rgba(255,255,255,0.08)" strokeWidth={stroke} fill="none"/>
+      <circle cx={size/2} cy={size/2} r={r} stroke={color} strokeWidth={stroke} fill="none"
+        strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)}
+        strokeLinecap="round" style={{ transition:'stroke-dashoffset 1s ease' }}/>
+    </svg>
+  );
+}
 
-      {/* Load trend */}
-      <div style={{ padding:'0 14px 24px' }}>
-        <Card style={{ cursor:'default' }}>
-          <div style={{ padding:'16px' }}>
-            <div style={{ color:C.text, fontSize:14, fontWeight:600, marginBottom:12 }}>Tendenza Carico Settimanale</div>
-            <div style={{ display:'flex', gap:4, alignItems:'flex-end', height:44, marginBottom:8 }}>
-              {[55,60,58,65,62,70,68].map((v,i)=>(
-                <div key={i} style={{ flex:1, height:`${(v/70)*100}%`, background:i===6?recColor:'rgba(255,255,255,0.12)', borderRadius:'3px 3px 0 0', opacity:i===6?1:0.6 }}/>
-              ))}
-            </div>
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:10 }}>
-              <span style={{ color:C.faint, fontSize:11 }}>7 giorni fa</span>
-              <span style={{ color:recColor, fontSize:11, fontWeight:600 }}>Oggi</span>
-            </div>
-            <div style={{ color:C.sub, fontSize:13, lineHeight:1.55 }}>
-              Il carico è <span style={{ color:recColor, fontWeight:600 }}>moderato</span> e la tendenza è stabile. Nessun rischio di sovraccarico. Le ripetute di venerdì e il lungo di sabato sono confermati.
-            </div>
-          </div>
-        </Card>
+// Workout type badge
+function TypeBadge({ type, small }) {
+  const m = TYPE_META[type] || TYPE_META.rest;
+  return (
+    <span style={{
+      background: m.bg, color: m.color, fontSize: small ? 9 : 10,
+      fontWeight: 700, letterSpacing:'0.08em', padding: small ? '2px 6px' : '3px 8px',
+      borderRadius: 4, textTransform:'uppercase',
+    }}>{m.label}</span>
+  );
+}
+
+// Garmin chip
+function GarminChip({ connected, syncAgo }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:6, background: connected ? C.blueDim : 'rgba(255,255,255,0.06)', border:`1px solid ${connected ? 'rgba(77,158,255,0.3)' : C.border}`, borderRadius:20, padding:'5px 10px' }}>
+      <div style={{ width:6, height:6, borderRadius:3, background: connected ? C.blue : C.faint }} />
+      <span style={{ color: connected ? C.blue : C.sub, fontSize:11, fontWeight:500 }}>
+        {connected ? `Garmin · ${syncAgo}` : 'Garmin · Non connesso'}
+      </span>
+    </div>
+  );
+}
+
+// Simple bar chart
+function BarChart({ data, labels, color = C.orange, height = 60 }) {
+  const max = Math.max(...data);
+  const w = 280; const barW = 28; const gap = (w - data.length * barW) / (data.length - 1);
+  return (
+    <svg width={w} height={height + 20} style={{ overflow:'visible' }}>
+      {data.map((v, i) => {
+        const bh = (v / max) * height;
+        const x = i * (barW + gap);
+        const isLast = i === data.length - 1;
+        return (
+          <g key={i}>
+            <rect x={x} y={height - bh} width={barW} height={bh} rx={5}
+              fill={isLast ? color : 'rgba(255,255,255,0.1)'}/>
+            {isLast && <rect x={x} y={height - bh} width={barW} height={bh} rx={5}
+              fill={`url(#bg${i})`} opacity={0.6}/>}
+            <text x={x + barW/2} y={height + 16} textAnchor="middle" fill={C.faint} fontSize={10}>{labels[i]}</text>
+          </g>
+        );
+      })}
+      <defs>
+        <linearGradient id="bg6" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+// Sparkline
+function SparkLine({ data, color = C.teal, width = 100, height = 36 }) {
+  const min = Math.min(...data); const max = Math.max(...data);
+  const pts = data.map((v,i) => {
+    const x = (i / (data.length-1)) * width;
+    const y = height - ((v - min) / (max - min + 0.001)) * height;
+    return `${x},${y}`;
+  }).join(' ');
+  return (
+    <svg width={width} height={height} style={{ overflow:'visible' }}>
+      <polyline points={pts} stroke={color} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+      {/* last dot */}
+      <circle cx={width} cy={height - ((data[data.length-1]-min)/(max-min+0.001))*height} r="3" fill={color}/>
+    </svg>
+  );
+}
+
+// Scroll container
+function ScrollArea({ children, style }) {
+  return (
+    <div style={{ flex:1, overflowY:'auto', ...style,
+      scrollbarWidth:'none', msOverflowStyle:'none',
+    }}>
+      <style>{`.scroll-hide::-webkit-scrollbar{display:none}`}</style>
+      <div className="scroll-hide" style={{ height:'100%', overflowY:'auto', scrollbarWidth:'none' }}>
+        {children}
       </div>
     </div>
   );
 }
 
-// ─── Race Settings ────────────────────────────────────────────────────────────
-function RaceSettingsScreenM({ tweaks, onChange, onBack }) {
-  const accent = tweaks.accentColor || C.orange;
-
-  const fields = [
-    { group: 'Gara',        key: 'raceName',       label: 'Nome gara',              placeholder: USER.raceName,         type: 'text' },
-    { group: 'Gara',        key: 'raceDate',       label: 'Data gara',              placeholder: USER.raceDate,         type: 'date' },
-    { group: 'Gara',        key: 'raceDistance',   label: 'Distanza (km)',          placeholder: String(USER.raceDistance),    type: 'number', step: '0.01' },
-    { group: 'Gara',        key: 'daysToRace',     label: 'Giorni al via',          placeholder: String(USER.daysToRace),      type: 'number' },
-    { group: 'Obiettivo',   key: 'raceTargetTime', label: 'Tempo target',           placeholder: USER.raceTargetTime,   type: 'text' },
-    { group: 'Obiettivo',   key: 'raceTargetPace', label: 'Ritmo target',           placeholder: USER.raceTargetPace,   type: 'text' },
-    { group: 'Atleta',      key: 'userName',       label: 'Nome',                   placeholder: USER.name,             type: 'text' },
-    { group: 'Atleta',      key: 'weeklyKm',       label: 'Volume sett. (km)',      placeholder: String(USER.weeklyKm),        type: 'number' },
-    { group: 'Atleta',      key: 'longestRun',     label: 'Corsa più lunga (km)',   placeholder: String(USER.longestRun),      type: 'number' },
-  ];
-
-  const groups = [...new Set(fields.map(f => f.group))];
-
-  const setVal = (key, type, v) => {
-    if (v === '' || v === null || v === undefined) {
-      onChange(key, undefined);
-      return;
-    }
-    if (type === 'number') {
-      const n = parseFloat(v);
-      onChange(key, isNaN(n) ? v : n);
-    } else {
-      onChange(key, v);
-    }
-  };
-
-  return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      {/* Header */}
-      <div style={{ padding:'8px 16px 12px', flexShrink:0, display:'flex', alignItems:'center', gap:10 }}>
-        <button onClick={onBack} style={{ width:38, height:38, borderRadius:19, background:C.card2, border:`1px solid ${C.border2}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        </button>
-        <div style={{ flex:1 }}>
-          <div style={{ color:C.text, fontSize:18, fontWeight:700 }}>Impostazioni Gara</div>
-          <div style={{ color:C.sub, fontSize:12 }}>Questi dati alimentano il Coach AI</div>
-        </div>
-      </div>
-
-      {/* Scroll */}
-      <div data-scroll="1" style={{ flex:1, overflowY:'auto', scrollbarWidth:'none', padding:'0 16px 24px' }}>
-        {groups.map(g => (
-          <div key={g} style={{ marginBottom:20 }}>
-            <div style={{ color:C.faint, fontSize:10, fontWeight:800, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8, padding:'0 4px' }}>{g}</div>
-            <div style={{ background:C.card2, border:`1px solid ${C.border2}`, borderRadius:14, overflow:'hidden' }}>
-              {fields.filter(f => f.group === g).map((f,i,arr) => (
-                <div key={f.key} style={{ padding:'12px 14px', borderBottom: i === arr.length-1 ? 'none' : `1px solid ${C.border2}` }}>
-                  <label style={{ color:C.sub, fontSize:11, fontWeight:600, display:'block', marginBottom:4 }}>{f.label}</label>
-                  <input
-                    type={f.type}
-                    step={f.step}
-                    value={tweaks[f.key] ?? ''}
-                    onChange={e => setVal(f.key, f.type, e.target.value)}
-                    placeholder={f.placeholder}
-                    style={{ width:'100%', background:'transparent', border:'none', outline:'none', color:C.text, fontSize:15, fontWeight:500, fontFamily:'DM Sans,sans-serif', padding:0 }}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-
-        {/* AI toggle */}
-        <div style={{ marginBottom:20 }}>
-          <div style={{ color:C.faint, fontSize:10, fontWeight:800, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8, padding:'0 4px' }}>Coach AI</div>
-          <div style={{ background:C.card2, border:`1px solid ${C.border2}`, borderRadius:14, padding:'14px', display:'flex', alignItems:'center', gap:12 }}>
-            <div style={{ flex:1 }}>
-              <div style={{ color:C.text, fontSize:14, fontWeight:600 }}>Coach AI (Gemini)</div>
-              <div style={{ color:C.sub, fontSize:12, marginTop:2 }}>Risposte generate in tempo reale con i tuoi dati Strava</div>
-            </div>
-            <button
-              onClick={() => onChange('claudeAI', tweaks.claudeAI === false)}
-              style={{ width:48, height:28, borderRadius:14, background: tweaks.claudeAI === false ? C.border2 : accent, border:'none', position:'relative', cursor:'pointer', transition:'background 0.2s', flexShrink:0 }}
-            >
-              <div style={{ position:'absolute', top:2, left: tweaks.claudeAI === false ? 2 : 22, width:24, height:24, borderRadius:12, background:'white', transition:'left 0.2s', boxShadow:'0 2px 6px rgba(0,0,0,0.3)' }}/>
-            </button>
-          </div>
-        </div>
-
-        {/* Reset */}
-        <button
-          onClick={() => {
-            if (confirm('Ripristinare tutti i valori default?')) {
-              ['raceName','raceDate','raceDistance','daysToRace','raceTargetTime','raceTargetPace','userName','weeklyKm','longestRun'].forEach(k => onChange(k, undefined));
-            }
-          }}
-          style={{ width:'100%', background:'transparent', border:`1px solid ${C.border2}`, borderRadius:12, padding:'12px', color:C.sub, fontSize:13, fontWeight:600, cursor:'pointer' }}
-        >
-          Ripristina default
-        </button>
-      </div>
-    </div>
-  );
-}
-
-Object.assign(window, { PlanScreenM, CoachScreenM, ProgressScreenM, RecoveryScreenM, RaceSettingsScreenM });
+// Export everything
+Object.assign(window, {
+  C, USER, PB, RACE_ESTIMATES, RACE_STRATEGY, GEL_PLAN, LONG_RUN_LAST,
+  riegelPredict, fmtTime, fmtPace,
+  RECOVERY_DATA, TODAY_WORKOUT, WEEK_SCHEDULE, TYPE_META,
+  PROGRESS_DATA, CHAT_HISTORY, SUGGESTIONS, COACH_RESPONSES,
+  PhoneFrame, DynamicIsland, StatusBar, BottomNav, Card,
+  RecoveryRing, TypeBadge, GarminChip, BarChart, SparkLine, ScrollArea,
+});

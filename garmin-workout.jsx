@@ -1,127 +1,160 @@
-// js/chart-components.jsx — Componenti chart aggiuntivi (RacePredictionCard)
-const { useMemo: useMemoCC } = React;
+// js/garmin-service.jsx — wrapper API Garmin Health + Activity
+// Endpoint base: https://apis.garmin.com/wellness-api/rest/...
+// Tutti gli endpoint richiedono Bearer token (access_token OAuth2).
 
-// ─── helper format secondi → "h:mm:ss" o "m:ss" ───
-function _fmtSec(sec) {
-  if (!isFinite(sec) || sec <= 0) return '—';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.round(sec % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  return `${m}:${String(s).padStart(2,'0')}`;
-}
-function _fmtPace(secPerKm) {
-  if (!isFinite(secPerKm) || secPerKm <= 0) return '—';
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${String(s).padStart(2,'0')}`;
-}
+const GARMIN_API_BASE = 'https://apis.garmin.com';
 
-// ─── RacePredictionCard: predizione tempo gara con confronto target ──────────
-// prediction = { predicted, optimistic, conservative, vdot, sources, tsbFactor }
-function RacePredictionCard({ prediction, target, raceName, distanceKm = 21.097 }) {
-  if (!prediction || !isFinite(prediction.predicted)) {
-    return (
-      <GlowCard glow={NEON.purple} intensity={0.1}>
-        <div style={{ display:'flex', alignItems:'center', gap: 12 }}>
-          <div style={{ fontSize: 22, opacity: 0.6 }}>🎯</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ color: NEON.text, fontSize: 13, fontWeight: 700 }}>Predizione non disponibile</div>
-            <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 3, lineHeight: 1.4 }}>
-              Servono almeno una corsa su 5K, 10K o 21K per stimare il tempo gara.
-            </div>
-          </div>
-        </div>
-      </GlowCard>
-    );
+async function garminFetch(path, params = {}) {
+  const auth = await getValidGarminAuth();
+  if (!auth) throw new Error('Garmin non connesso');
+
+  const url = new URL(`${GARMIN_API_BASE}${path}`);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v != null) url.searchParams.append(k, v);
+  });
+
+  const r = await fetch(url.toString(), {
+    headers: { 'Authorization': `Bearer ${auth.access_token}` },
+  });
+
+  if (r.status === 401) {
+    GarminAuth.clear();
+    throw new Error('Token scaduto — rilogin necessario');
   }
-
-  const targetSec = useMemoCC(() => {
-    if (!target) return null;
-    const parts = target.split(':').map(Number);
-    if (parts.length === 3) return parts[0]*3600 + parts[1]*60 + parts[2];
-    if (parts.length === 2) return parts[0]*60 + parts[1];
-    return null;
-  }, [target]);
-
-  const predicted = prediction.predicted;
-  const predictedTime = _fmtSec(predicted);
-  const predictedPace = _fmtPace(predicted / distanceKm);
-
-  const diff = isFinite(targetSec) ? predicted - targetSec : 0;
-  const ahead = diff < 0;
-  const diffMin = Math.abs(Math.floor(Math.abs(diff) / 60));
-  const diffSec = Math.abs(Math.round(Math.abs(diff) % 60));
-  const diffColor = ahead ? NEON.teal : NEON.orange;
-
-  const sourceLabel = prediction.sources?.length
-    ? prediction.sources.map(s => s === '21k' ? '21K' : s === '10k' ? '10K' : '5K').join(' + ')
-    : '—';
-
-  return (
-    <GlowCard glow={NEON.purple} intensity={0.18}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 14 }}>
-        <div>
-          <div style={{ color: NEON.textFaint, fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' }}>STIMA TEMPO</div>
-          <div style={{ color: NEON.text, fontSize: 13, fontWeight: 600, marginTop: 2 }}>{raceName || 'Mezza maratona'}</div>
-        </div>
-        {prediction.vdot && (
-          <div style={{
-            background: 'rgba(167,139,250,0.15)',
-            border: '1px solid rgba(167,139,250,0.35)',
-            color: NEON.purple,
-            fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
-            padding: '4px 8px', borderRadius: 6,
-          }}>VDOT {prediction.vdot}</div>
-        )}
-      </div>
-
-      {/* Big predicted time */}
-      <div style={{ textAlign:'center', padding: '8px 0 12px' }}>
-        <div style={{
-          color: NEON.purple,
-          fontSize: 56,
-          fontWeight: 900,
-          letterSpacing: '-0.03em',
-          lineHeight: 1,
-          fontVariantNumeric: 'tabular-nums',
-          textShadow: `0 0 20px ${NEON.purple}66`,
-        }}>{predictedTime}</div>
-        <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 6 }}>
-          predizione · passo {predictedPace}/km
-        </div>
-        {(prediction.optimistic && prediction.conservative) && (
-          <div style={{ color: NEON.textFaint, fontSize: 10, marginTop: 4 }}>
-            range: {_fmtSec(prediction.optimistic)} – {_fmtSec(prediction.conservative)}
-          </div>
-        )}
-      </div>
-
-      {/* Target comparison */}
-      {isFinite(targetSec) && targetSec > 0 && (
-        <div style={{
-          marginTop: 4,
-          padding: '12px 14px',
-          background: `${diffColor}10`,
-          borderLeft: `3px solid ${diffColor}`,
-          borderRadius: 8,
-          display:'flex', alignItems:'center', justifyContent:'space-between',
-        }}>
-          <div>
-            <div style={{ color: NEON.textDim, fontSize: 10, fontWeight: 600, letterSpacing: '0.05em' }}>vs TARGET {target}</div>
-            <div style={{ color: diffColor, fontSize: 16, fontWeight: 800, letterSpacing: '-0.01em', marginTop: 2 }}>
-              {ahead ? 'In anticipo di' : 'In ritardo di'} {diffMin}:{String(diffSec).padStart(2,'0')}
-            </div>
-          </div>
-          <div style={{ fontSize: 24 }}>{ahead ? '🎯' : '💪'}</div>
-        </div>
-      )}
-
-      <div style={{ color: NEON.textFaint, fontSize: 10, marginTop: 10, textAlign:'center' }}>
-        Calcolato da PB su {sourceLabel} · {prediction.confidence ? `confidenza ${prediction.confidence}` : ''} · correzione forma TSB
-      </div>
-    </GlowCard>
-  );
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`Garmin API ${r.status}: ${t}`);
+  }
+  return r.json();
 }
 
-Object.assign(window, { RacePredictionCard });
+// ─── Profile ──────────────────────────────────────────────────────────────────
+async function fetchGarminProfile() {
+  return garminFetch('/wellness-api/rest/user/id');
+}
+
+// ─── Activities (allenamenti) ─────────────────────────────────────────────────
+// Range Unix epoch seconds.
+async function fetchGarminActivities(uploadStartTime, uploadEndTime) {
+  return garminFetch('/wellness-api/rest/activities', {
+    uploadStartTimeInSeconds: uploadStartTime,
+    uploadEndTimeInSeconds:   uploadEndTime,
+  });
+}
+
+// Helper: ultime N ore di attività
+async function fetchRecentActivities(hours = 24 * 7) {
+  const now   = Math.floor(Date.now() / 1000);
+  const start = now - hours * 3600;
+  return fetchGarminActivities(start, now);
+}
+
+// ─── Health Snapshot (battito + HRV + stress + spo2) ─────────────────────────
+async function fetchGarminHealthSnapshot(startSec, endSec) {
+  return garminFetch('/wellness-api/rest/healthSnapshot', {
+    uploadStartTimeInSeconds: startSec,
+    uploadEndTimeInSeconds:   endSec,
+  });
+}
+
+// ─── Sleep ────────────────────────────────────────────────────────────────────
+async function fetchGarminSleep(calStartSec, calEndSec) {
+  return garminFetch('/wellness-api/rest/sleeps', {
+    calendarDateStartInSeconds: calStartSec,
+    calendarDateEndInSeconds:   calEndSec,
+  });
+}
+
+async function fetchLastNightSleep() {
+  const now = Math.floor(Date.now() / 1000);
+  return fetchGarminSleep(now - 36 * 3600, now);
+}
+
+// ─── Daily HR ─────────────────────────────────────────────────────────────────
+async function fetchGarminDailyHR(uploadStart, uploadEnd) {
+  return garminFetch('/wellness-api/rest/dailies', {
+    uploadStartTimeInSeconds: uploadStart,
+    uploadEndTimeInSeconds:   uploadEnd,
+  });
+}
+
+// ─── Weight ───────────────────────────────────────────────────────────────────
+async function fetchGarminWeight(uploadStart, uploadEnd) {
+  return garminFetch('/wellness-api/rest/bodyComps', {
+    uploadStartTimeInSeconds: uploadStart,
+    uploadEndTimeInSeconds:   uploadEnd,
+  });
+}
+
+// ─── Stress ───────────────────────────────────────────────────────────────────
+async function fetchGarminStress(uploadStart, uploadEnd) {
+  return garminFetch('/wellness-api/rest/stressDetails', {
+    uploadStartTimeInSeconds: uploadStart,
+    uploadEndTimeInSeconds:   uploadEnd,
+  });
+}
+
+// ─── Steps (epoch summary) ────────────────────────────────────────────────────
+async function fetchGarminSteps(uploadStart, uploadEnd) {
+  return garminFetch('/wellness-api/rest/epochs', {
+    uploadStartTimeInSeconds: uploadStart,
+    uploadEndTimeInSeconds:   uploadEnd,
+  });
+}
+
+// ─── Snapshot completo: ultime 24h ────────────────────────────────────────────
+async function fetchGarmin24hSnapshot() {
+  const now   = Math.floor(Date.now() / 1000);
+  const start = now - 24 * 3600;
+  const out = { fetchedAt: now };
+  await Promise.allSettled([
+    fetchGarminActivities(start, now).then(d => out.activities = d),
+    fetchGarminSleep(now - 36 * 3600, now).then(d => out.sleep = d),
+    fetchGarminDailyHR(start, now).then(d => out.dailyHR = d),
+    fetchGarminStress(start, now).then(d => out.stress = d),
+    fetchGarminSteps(start, now).then(d => out.steps = d),
+    fetchGarminHealthSnapshot(start, now).then(d => out.health = d),
+  ]);
+  return out;
+}
+
+// ─── Adattatore: Garmin activity → formato coach engine ──────────────────────
+// Speculare a activitiesToTrainingData(stravaActs) ma per Garmin
+function garminActivitiesToTraining(garminActs) {
+  if (!Array.isArray(garminActs)) return [];
+  return garminActs
+    .filter(a => /running|run/i.test(a.activityType || ''))
+    .map(a => ({
+      date:         new Date(a.startTimeInSeconds * 1000).toISOString().slice(0, 10),
+      distance_km:  (a.distanceInMeters || 0) / 1000,
+      duration_min: (a.durationInSeconds || 0) / 60,
+      avg_pace:     a.averagePaceInMinutesPerKilometer,
+      avg_hr:       a.averageHeartRateInBeatsPerMinute,
+      max_hr:       a.maxHeartRateInBeatsPerMinute,
+      elevation_m:  a.totalElevationGainInMeters || 0,
+      type:         classifyByPaceHR(a),
+      source:       'garmin',
+    }));
+}
+
+function classifyByPaceHR(a) {
+  const hr = a.averageHeartRateInBeatsPerMinute;
+  if (!hr) return 'easy';
+  if (hr > 170) return 'tempo';
+  if (hr > 155) return 'threshold';
+  return 'easy';
+}
+
+Object.assign(window, {
+  garminFetch,
+  fetchGarminProfile,
+  fetchGarminActivities, fetchRecentActivities,
+  fetchGarminHealthSnapshot,
+  fetchGarminSleep, fetchLastNightSleep,
+  fetchGarminDailyHR,
+  fetchGarminWeight,
+  fetchGarminStress,
+  fetchGarminSteps,
+  fetchGarmin24hSnapshot,
+  garminActivitiesToTraining,
+});

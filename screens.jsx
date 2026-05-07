@@ -1,370 +1,1046 @@
+// js/screens-mobile.jsx — PlanScreen, CoachScreen, ProgressScreen, RecoveryScreen (mobile)
+const { useState, useEffect, useRef } = React;
 
-// js/home.jsx — HomeScreen + WorkoutScreen
-const { useState } = React;
-
-function HomeScreen({ onNav, tweaks }) {
+// ─── Plan ─────────────────────────────────────────────────────────────────────
+function PlanScreenM({ onNav, tweaks, activities }) {
   const accent = tweaks.accentColor || C.orange;
-  const rec = { ...RECOVERY_DATA, score: tweaks.recoveryScore || RECOVERY_DATA.score };
-  const recColor = rec.score >= 80 ? C.teal : rec.score >= 60 ? accent : '#FF4466';
-  const recLabel = rec.score >= 80 ? 'Eccellente' : rec.score >= 60 ? 'Buono' : 'Basso';
-  const recAdvice = rec.score >= 80 ? 'Vai come previsto' : rec.score >= 60 ? 'Vai come previsto' : 'Riduci intensità';
+  const currentPhase = USER.daysToRace <= 14 ? 'Scarico (Taper)'
+                     : USER.daysToRace <= 35 ? 'Prep. Gara'
+                     : USER.daysToRace <= 56 ? 'Lavoro a Soglia'
+                     : USER.daysToRace <= 84 ? 'Sviluppo Aerobico'
+                     : 'Costruzione Base';
+  const phases = ['Costruzione Base','Sviluppo Aerobico','Lavoro a Soglia','Prep. Gara','Scarico (Taper)'];
+
+  // Genera piano dinamico: 7 giorni a partire da oggi, ognuno con un workout
+  const FULL_WEEK = React.useMemo(() => {
+    const trainingData = activities ? activitiesToTrainingData(activities) : [];
+    const loadHistory = calculateTrainingLoad(trainingData);
+    const raceDate = USER.raceDateISO || USER.raceDate;
+    const week = generateWeekPlan(loadHistory, raceDate);
+    // Mappa lo status (done se isPast e c'è attività; today se isToday; planned altrimenti)
+    return week.map((d, i) => {
+      const date = new Date(d.date);
+      const matchAct = (activities || []).find(a => {
+        const ad = new Date(a.start_date);
+        return ad.toDateString() === date.toDateString();
+      });
+      return {
+        ...d,
+        type: d.workout?.type || 'rest',
+        dist: d.workout?.distance || 0,
+        status: d.isToday ? 'today' : (matchAct ? 'done' : 'planned'),
+        actualKm: matchAct ? +(matchAct.distance / 1000).toFixed(1) : null,
+      };
+    });
+  }, [activities]);
+
+  // Default: oggi (indice 0)
+  const [selectedDay, setSelectedDay] = useState(0);
+  const sel = FULL_WEEK[selectedDay] || FULL_WEEK[0];
+  const w = sel?.workout;
 
   return (
     <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
-      <DynamicIsland />
-      <StatusBar />
-
-      {/* Header */}
-      <div style={{ padding:'8px 22px 16px', display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-        <div>
-          <div style={{ color: C.sub, fontSize:13, fontWeight:400, marginBottom:2 }}>
-            {USER.todayLabel}, {USER.todayDate}
-          </div>
-          <div style={{ color: C.text, fontSize:24, fontWeight:700, letterSpacing:'-0.5px', lineHeight:1.15 }}>
-            Buongiorno, {tweaks.userName || USER.name} 👋
-          </div>
-          <div style={{ color: C.sub, fontSize:12, marginTop:4 }}>
-            Settimana {USER.currentWeek} di {USER.weeksTotal} · <span style={{ color: accent }}>{USER.daysToRace} giorni</span> alla gara
-          </div>
-        </div>
-        {/* Avatar */}
-        <div style={{ width:42, height:42, borderRadius:21, background:`linear-gradient(135deg, ${accent}, ${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center' }}>
-          <span style={{ color:'white', fontSize:16, fontWeight:700 }}>{(tweaks.userName || 'S')[0]}</span>
+      <div style={{ padding:'8px 20px 12px' }}>
+        <div style={{ color:C.sub, fontSize:13, marginBottom:2 }}>Piano di Allenamento</div>
+        <div style={{ color:C.text, fontSize:22, fontWeight:700, letterSpacing:'-0.4px' }}>Settimana {USER.currentWeek} di {USER.weeksTotal}</div>
+        <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:8 }}>
+          {phases.map((p,i)=>(
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:3 }}>
+              <div style={{ width:p===currentPhase?22:6, height:6, borderRadius:3, background:p===currentPhase?accent:'rgba(255,255,255,0.15)', transition:'width 0.3s' }}/>
+            </div>
+          ))}
+          <span style={{ color:accent, fontSize:11, fontWeight:600, marginLeft:4 }}>{currentPhase}</span>
         </div>
       </div>
 
-      {/* Garmin chip */}
-      <div style={{ padding:'0 22px 14px' }}>
-        <GarminChip connected={tweaks.garminConnected !== false} syncAgo={USER.garminSyncAgo} />
-      </div>
+      {/* Day pills — riga compatta e leggibile */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <div style={{ display:'flex', gap:6 }}>
+          {FULL_WEEK.map((d,i)=>{
+            const active   = i===selectedDay;
+            const m        = TYPE_META[d.type] || TYPE_META.rest;
+            const isDone   = d.status==='done';
+            const isToday  = d.status==='today';
+            const isRest   = d.type==='rest';
+            const dayShort = (d.dayLabel || '').slice(0,3).replace(/^./, c => c.toUpperCase());
 
-      {/* TODAY'S WORKOUT — hero card */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <Card onClick={() => onNav('workout', TODAY_WORKOUT)} style={{
-          background: `linear-gradient(135deg, #12122A 0%, #0F0F1E 100%)`,
-          border: `1px solid ${accent}33`,
-          position:'relative', overflow:'hidden',
-        }}>
-          {/* accent stripe */}
-          <div style={{ position:'absolute', top:0, left:0, right:0, height:3, background:`linear-gradient(90deg, ${accent}, transparent)` }} />
-          <div style={{ padding:'18px 18px 14px' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12 }}>
-              <div>
-                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
-                  <TypeBadge type={TODAY_WORKOUT.type} />
-                  <span style={{ color: C.sub, fontSize:11 }}>{USER.todayLabel.toUpperCase()} · OGGI</span>
-                </div>
-                <div style={{ color: C.text, fontSize:20, fontWeight:700, letterSpacing:'-0.4px', lineHeight:1.2 }}>
-                  {TODAY_WORKOUT.title}
-                </div>
-                <div style={{ color: C.sub, fontSize:13, marginTop:3 }}>{TODAY_WORKOUT.subtitle}</div>
-              </div>
-              {/* Run icon */}
-              <div style={{ width:44, height:44, borderRadius:22, background: accent+'22', border:`1px solid ${accent}44`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                  <path d="M13 4C13 5.1 13.9 6 15 6C16.1 6 17 5.1 17 4C17 2.9 16.1 2 15 2C13.9 2 13 2.9 13 4Z" fill={accent}/>
-                  <path d="M5.5 18.5L8 13L11 16L13 10L16.5 18.5" stroke={accent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-                </svg>
-              </div>
-            </div>
+            // Colore dot: tipo-specifico, oppure grigio per riposo
+            const dotColor = isRest ? 'rgba(255,255,255,0.25)' : m.color;
+            const bg       = active  ? m.bg
+                           : isToday ? `${m.color}18`
+                           : isDone  ? 'rgba(0,207,168,0.08)'
+                                     : 'rgba(255,255,255,0.035)';
+            const border   = active  ? `2px solid ${m.color}`
+                           : isToday ? `1.5px solid ${m.color}66`
+                           : isDone  ? `1px solid ${C.teal}33`
+                                     : `1px solid ${C.border}`;
 
-            {/* Metrics row */}
-            <div style={{ display:'flex', gap:6, marginBottom:16 }}>
-              {[
-                { val: `${TODAY_WORKOUT.distance} km`, lbl:'Distanza' },
-                { val: `${TODAY_WORKOUT.duration} min`, lbl:'Durata' },
-                { val: TODAY_WORKOUT.targetPace, lbl:'Ritmo Target' },
-              ].map(m => (
-                <div key={m.lbl} style={{ flex:1, background:'rgba(255,255,255,0.05)', borderRadius:10, padding:'8px 10px' }}>
-                  <div style={{ color: C.text, fontSize:13, fontWeight:600 }}>{m.val}</div>
-                  <div style={{ color: C.faint, fontSize:10, marginTop:1 }}>{m.lbl}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Phase pills */}
-            <div style={{ display:'flex', gap:6, marginBottom:16 }}>
-              {[
-                { label:'Riscaldamento', dur:'10 min', col: C.teal },
-                { label:'Tempo', dur:'25 min', col: accent },
-                { label:'Defaticamento', dur:'10 min', col: C.teal },
-              ].map(p => (
-                <div key={p.label} style={{ flex:1, height:4, borderRadius:2, background: p.col+'44', position:'relative', overflow:'hidden' }}>
-                  <div style={{ position:'absolute', inset:0, background: p.col, opacity:0.6 }} />
-                </div>
-              ))}
-            </div>
-
-            {/* CTA */}
-            <button onClick={e => { e.stopPropagation(); onNav('workout', TODAY_WORKOUT); }} style={{
-              width:'100%', height:48, background: accent, border:'none', borderRadius:12,
-              color:'white', fontSize:15, fontWeight:700, letterSpacing:'0.01em', cursor:'pointer',
-              display:'flex', alignItems:'center', justifyContent:'center', gap:8,
-              boxShadow:`0 4px 20px ${accent}44`,
-            }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
-              Vedi Dettagli Allenamento
-            </button>
-          </div>
-        </Card>
-      </div>
-
-      {/* Recupero strip */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <Card style={{ cursor:'default' }} onClick={() => onNav('recovery')}>
-          <div style={{ padding:'14px 16px', display:'flex', alignItems:'center', gap:16 }}>
-            {/* Ring */}
-            <div style={{ position:'relative', width:56, height:56, flexShrink:0 }}>
-              <RecoveryRing score={rec.score} size={56} stroke={5} />
-              <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                <span style={{ color: recColor, fontSize:14, fontWeight:700 }}>{rec.score}</span>
-              </div>
-            </div>
-            <div style={{ flex:1 }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                <div style={{ color: C.text, fontSize:14, fontWeight:600 }}>Recupero</div>
-                <span style={{ background: recColor+'22', color: recColor, fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:4 }}>{recAdvice}</span>
-              </div>
-              <div style={{ display:'flex', gap:14, marginTop:6 }}>
-                <div><span style={{ color: C.faint, fontSize:11 }}>Sonno </span><span style={{ color: C.text, fontSize:11, fontWeight:600 }}>{rec.sleep}h</span></div>
-                <div><span style={{ color: C.faint, fontSize:11 }}>HRV </span><span style={{ color: C.text, fontSize:11, fontWeight:600 }}>{rec.hrv} ms</span></div>
-                <div><span style={{ color: C.faint, fontSize:11 }}>FC Rip. </span><span style={{ color: C.text, fontSize:11, fontWeight:600 }}>{rec.restingHR} bpm</span></div>
-              </div>
-            </div>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 18l6-6-6-6" stroke={C.faint} strokeWidth="2" strokeLinecap="round"/></svg>
-          </div>
-        </Card>
-      </div>
-
-      {/* Coach briefing */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <Card style={{ cursor:'default' }}>
-          <div style={{ padding:'14px 16px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
-              <div style={{ width:32, height:32, borderRadius:16, background:`linear-gradient(135deg, ${accent}44, ${C.purple}44)`, border:`1px solid ${accent}33`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 5.92 2 10.8c0 2.96 1.56 5.6 4 7.28V22l3.6-2.4c.76.24 1.56.4 2.4.4 5.52 0 10-3.92 10-9.2S17.52 2 12 2z" stroke={accent} strokeWidth="1.5" fill={accent+'22'}/></svg>
-              </div>
-              <div>
-                <div style={{ color: C.text, fontSize:13, fontWeight:600 }}>Briefing del Coach</div>
-                <div style={{ color: C.sub, fontSize:11 }}>AI · Aggiornato stamattina</div>
-              </div>
-            </div>
-            <p style={{ color: C.text, fontSize:13, lineHeight:1.6, margin:0 }}>
-              Il sonno è ottimo e il recupero è buono: <span style={{ color: recColor, fontWeight:600 }}>{rec.score}</span>. La corsa a tempo di oggi è la tua sessione aerobica chiave — punta a <span style={{ color: accent, fontWeight:600 }}>5:15–5:25/km</span> nella serie principale. Non superare Zona 4; le ripetute di venerdì sono la sessione chiave di questa settimana.
-            </p>
-          </div>
-        </Card>
-      </div>
-
-      {/* Week progress */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-          <span style={{ color: C.text, fontSize:14, fontWeight:600 }}>Questa Settimana</span>
-          <span style={{ color: C.sub, fontSize:12 }}>7 km <span style={{ color: C.faint }}>/ 47 km obiettivo</span></span>
-        </div>
-        {/* Progress bar */}
-        <div style={{ height:3, background:'rgba(255,255,255,0.08)', borderRadius:2, marginBottom:12 }}>
-          <div style={{ height:'100%', width:'15%', background: accent, borderRadius:2 }} />
-        </div>
-        {/* Day dots */}
-        <div style={{ display:'flex', gap:4 }}>
-          {WEEK_SCHEDULE.map((d, i) => {
-            const isDone = d.status === 'done';
-            const isToday = d.status === 'today';
-            const isRest = d.type === 'rest';
-            const m = TYPE_META[d.type];
             return (
-              <div key={i} onClick={() => onNav('plan')} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:5, cursor:'pointer' }}>
-                <div style={{ color: isToday ? C.text : C.faint, fontSize:10, fontWeight: isToday ? 700 : 400 }}>{d.day}</div>
+              <div key={i} onClick={()=>setSelectedDay(i)}
+                style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:5, cursor:'pointer' }}>
+                {/* Etichetta giorno — sempre visibile, più leggibile */}
                 <div style={{
-                  width:32, height:32, borderRadius:16,
-                  background: isDone ? C.teal+'22' : isToday ? m.bg : 'rgba(255,255,255,0.05)',
-                  border: isToday ? `2px solid ${m.color}` : isDone ? `1px solid ${C.teal}44` : `1px solid ${C.border}`,
-                  display:'flex', alignItems:'center', justifyContent:'center',
+                  color: active ? C.text : isToday ? m.color : C.sub,
+                  fontSize:10.5, fontWeight:active||isToday?700:500,
+                  letterSpacing:'0.02em', textTransform:'uppercase',
+                }}>{dayShort}</div>
+
+                {/* Tile */}
+                <div style={{
+                  width:'100%', aspectRatio:'1/1.05',
+                  borderRadius:11, background:bg, border,
+                  transition:'all 0.15s', position:'relative',
+                  display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:4,
                 }}>
+                  {/* Badge OGGI in alto */}
+                  {isToday && (
+                    <div style={{
+                      position:'absolute', top:-7, left:'50%', transform:'translateX(-50%)',
+                      background:m.color, color:'white', fontSize:8, fontWeight:800,
+                      letterSpacing:'0.08em', padding:'2px 6px', borderRadius:4,
+                    }}>OGGI</div>
+                  )}
+
+                  {/* Contenuto centrale */}
                   {isDone ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7" stroke={C.teal} strokeWidth="2.5" strokeLinecap="round"/></svg>
-                  ) : isToday ? (
-                    <div style={{ width:8, height:8, borderRadius:4, background: m.color }} />
+                    <>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7" stroke={C.teal} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      {d.actualKm > 0 && (
+                        <div style={{ color:C.teal, fontSize:10, fontWeight:700, lineHeight:1 }}>
+                          {d.actualKm}<span style={{ fontSize:8, fontWeight:500, opacity:0.7 }}>km</span>
+                        </div>
+                      )}
+                    </>
                   ) : isRest ? (
-                    <div style={{ width:12, height:2, borderRadius:1, background: C.faint }} />
+                    <>
+                      <div style={{ fontSize:16, lineHeight:1 }}>💤</div>
+                      <div style={{ color:C.faint, fontSize:8.5, fontWeight:600, letterSpacing:'0.02em' }}>RIPOSO</div>
+                    </>
                   ) : (
-                    <div style={{ width:6, height:6, borderRadius:3, background: C.faint }} />
+                    <>
+                      <div style={{ width:7, height:7, borderRadius:4, background:dotColor }}/>
+                      <div style={{ color:active?m.color:C.text, fontSize:12, fontWeight:700, lineHeight:1 }}>
+                        {d.dist}<span style={{ fontSize:9, fontWeight:500, opacity:0.7 }}>km</span>
+                      </div>
+                      <div style={{ color:active?m.color:C.faint, fontSize:8, fontWeight:600, letterSpacing:'0.04em', textTransform:'uppercase', opacity:0.85 }}>
+                        {m.label || d.type}
+                      </div>
+                    </>
                   )}
                 </div>
-                {d.dist > 0 && <div style={{ color: C.faint, fontSize:9 }}>{d.dist}k</div>}
               </div>
             );
           })}
         </div>
+
+        {/* Legenda rapida */}
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:14, marginTop:10, flexWrap:'wrap' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7" stroke={C.teal} strokeWidth="3" strokeLinecap="round"/></svg>
+            <span style={{ color:C.faint, fontSize:10 }}>Fatto</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <div style={{ width:7, height:7, borderRadius:4, background:accent }}/>
+            <span style={{ color:C.faint, fontSize:10 }}>Da fare</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ fontSize:11 }}>💤</span>
+            <span style={{ color:C.faint, fontSize:10 }}>Riposo</span>
+          </div>
+        </div>
       </div>
 
-      {/* Key sessions ahead */}
-      <div style={{ padding:'0 16px 24px' }}>
-        <div style={{ color: C.text, fontSize:14, fontWeight:600, marginBottom:10 }}>Sessioni Chiave in Arrivo</div>
-        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-          {WEEK_SCHEDULE.filter(d => d.key && d.status === 'upcoming').map((d,i) => (
-            <Card key={i} onClick={() => onNav('plan')} style={{ cursor:'pointer' }}>
-              <div style={{ padding:'12px 14px', display:'flex', alignItems:'center', gap:12 }}>
-                <div style={{ width:40, height:40, borderRadius:10, background: TYPE_META[d.type].bg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-                  <TypeBadge type={d.type} small />
+      {/* Day detail */}
+      <div style={{ padding:'0 14px 14px' }}>
+        {w ? (
+          <Card onClick={()=>onNav('workout',w)} style={{ border:`1px solid ${TYPE_META[w.type].color}33` }}>
+            <div style={{ padding:'16px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12 }}>
+                <div>
+                  <TypeBadge type={w.type} />
+                  <div style={{ color:C.text, fontSize:18, fontWeight:700, letterSpacing:'-0.3px', marginTop:6 }}>{w.title}</div>
+                  <div style={{ color:C.sub, fontSize:13, marginTop:3 }}>{w.subtitle}</div>
                 </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ color: C.text, fontSize:13, fontWeight:600 }}>{d.title}</div>
-                  <div style={{ color: C.sub, fontSize:11, marginTop:2 }}>{d.day} · {d.dist > 0 ? `${d.dist} km` : 'Strength'}</div>
+                <div style={{ width:44, height:44, borderRadius:12, background:TYPE_META[w.type].bg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M8 5v14l11-7z" fill={TYPE_META[w.type].color}/></svg>
                 </div>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 18l6-6-6-6" stroke={C.faint} strokeWidth="2" strokeLinecap="round"/></svg>
+              </div>
+              <div style={{ display:'flex', gap:6 }}>
+                {w.distance>0 && <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:8, padding:'6px 10px' }}><span style={{ color:C.text, fontSize:13, fontWeight:600 }}>{w.distance} km</span></div>}
+                <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:8, padding:'6px 10px' }}><span style={{ color:C.text, fontSize:13, fontWeight:600 }}>{w.duration} min</span></div>
+                {w.targetPace && <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:8, padding:'6px 10px' }}><span style={{ color:C.text, fontSize:13, fontWeight:600 }}>{w.targetPace}</span></div>}
+              </div>
+              <div style={{ display:'flex', justifyContent:'flex-end', marginTop:12 }}>
+                <span style={{ color:accent, fontSize:13, fontWeight:600 }}>Vedi Dettagli →</span>
+              </div>
+            </div>
+          </Card>
+        ) : (
+          <Card style={{ cursor:'default' }}>
+            <div style={{ padding:'28px', textAlign:'center' }}>
+              <div style={{ fontSize:32, marginBottom:10 }}>🛌</div>
+              <div style={{ color:C.text, fontSize:17, fontWeight:600 }}>Giorno di Riposo</div>
+              <div style={{ color:C.sub, fontSize:14, marginTop:6, lineHeight:1.55 }}>Il recupero è allenamento. Dormi, mangia bene e lascia che le adattamenti avvengano.</div>
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {/* Load summary */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:10 }}>Carico Settimanale</div>
+        <Card style={{ cursor:'default' }}>
+          <div style={{ padding:'16px' }}>
+            {(() => {
+              const planned = FULL_WEEK.reduce((s,d)=> s + (d.workout?.distance || 0), 0);
+              const runDays = FULL_WEEK.filter(d => d.type !== 'rest').length;
+              const longest = Math.max(...FULL_WEEK.map(d => d.workout?.distance || 0));
+              const phaseHint = USER.daysToRace <= 14 ? '↓ Taper'
+                              : USER.daysToRace <= 35 ? '↑ Carico'
+                              : '→ Stabile';
+              return (
+                <div style={{ display:'flex', gap:0, marginBottom:14 }}>
+                  {[
+                    { label:'Volume', val:`${Math.round(planned)} km`, sub: phaseHint },
+                    { label:'Corse',  val: `${runDays}`, sub: `${7-runDays} riposo` },
+                    { label:'Lungo',  val: `${longest} km`, sub: USER.daysToRace <= 14 ? 'Taper lungo' : 'Settimanale' },
+                  ].map((s,i)=>(
+                    <div key={i} style={{ flex:1, borderRight:i<2?`1px solid ${C.border}`:'none', paddingRight:12, paddingLeft:i>0?12:0 }}>
+                      <div style={{ color:C.faint, fontSize:11, marginBottom:3 }}>{s.label}</div>
+                      <div style={{ color:C.text, fontSize:17, fontWeight:700 }}>{s.val}</div>
+                      <div style={{ color:accent, fontSize:11, marginTop:2 }}>{s.sub}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+            <div style={{ color:C.faint, fontSize:11, marginBottom:6 }}>Bilanciamento Carico</div>
+            <div style={{ display:'flex', gap:3, height:8 }}>
+              {[{w:45,c:C.teal},{w:30,c:accent},{w:15,c:C.purple},{w:10,c:'rgba(255,255,255,0.2)'}].map((b,i)=>(
+                <div key={i} style={{ flex:b.w, height:'100%', background:b.c, borderRadius:2, opacity:0.8 }}/>
+              ))}
+            </div>
+            <div style={{ display:'flex', gap:10, marginTop:8 }}>
+              {[{c:C.teal,l:'Facile 45%'},{c:accent,l:'Tempo 30%'},{c:C.purple,l:'Duro 15%'}].map(b=>(
+                <div key={b.l} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                  <div style={{ width:6, height:6, borderRadius:3, background:b.c }}/>
+                  <span style={{ color:C.faint, fontSize:11 }}>{b.l}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Race countdown */}
+      <div style={{ padding:'0 14px 24px' }}>
+        <div style={{ background:`linear-gradient(135deg, ${accent}18, ${C.purple}12)`, border:`1px solid ${accent}33`, borderRadius:18, padding:'16px 18px', display:'flex', alignItems:'center', gap:14 }}>
+          <div style={{ fontSize:32 }}>🏁</div>
+          <div>
+            <div style={{ color:C.text, fontSize:15, fontWeight:600 }}>{USER.raceName}</div>
+            <div style={{ color:accent, fontSize:26, fontWeight:800, letterSpacing:'-0.5px' }}>{USER.daysToRace} giorni</div>
+            <div style={{ color:C.sub, fontSize:12 }}>Obiettivo: {USER.goal} · PB: {USER.pb}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Coach Chat ───────────────────────────────────────────────────────────────
+// Helper: chiama /api/chat (Gemini) o fallback a window.claude in preview
+async function callCoachAI({ system, messages }) {
+  // Endpoint Vercel/Edge → Gemini API
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system, messages }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data.reply) return data.reply;
+    // Se /api/chat dice "API key non configurata" e siamo in preview, prova window.claude
+    if (window.claude && window.claude.complete) {
+      return await window.claude.complete({
+        messages: [
+          { role: 'user', content: system },
+          { role: 'assistant', content: 'Perfetto, sono il tuo coach. Dimmi pure come ti senti o cosa vuoi sapere.' },
+          ...messages,
+        ],
+      });
+    }
+    throw new Error(data.error || `HTTP ${r.status}`);
+  } catch (err) {
+    // Ultimo fallback: Claude nel preview
+    if (window.claude && window.claude.complete) {
+      return await window.claude.complete({
+        messages: [
+          { role: 'user', content: system },
+          { role: 'assistant', content: 'Perfetto, sono il tuo coach. Dimmi pure come ti senti o cosa vuoi sapere.' },
+          ...messages,
+        ],
+      });
+    }
+    throw err;
+  }
+}
+
+function CoachScreenM({ tweaks, onNav, auth }) {
+  const accent = tweaks.accentColor || C.orange;
+  const [messages, setMessages] = useState(CHAT_HISTORY);
+  const [input, setInput] = useState('');
+  const [typing, setTyping] = useState(false);
+  const [aiReady, setAiReady] = useState(true);
+  const [stravaActs, setStravaActs] = useState(null); // null = loading, [] = nessuna
+  const bottomRef = useRef(null);
+
+  // Carica attività Strava reali (storico fino a 200) per dare contesto live al Coach
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!auth) { setStravaActs([]); return; }
+      try {
+        const acts = await fetchActivities(auth, 200);
+        if (!cancelled) setStravaActs(acts || []);
+      } catch (e) {
+        if (!cancelled) setStravaActs([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [auth]);
+
+  useEffect(() => {
+    setAiReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (bottomRef.current) {
+      const el = bottomRef.current.closest('[data-scroll]');
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, typing]);
+
+  const useRealAI = tweaks.claudeAI !== false; // default ON
+
+  // Override USER con tweaks (gara parametrizzabile)
+  const race = {
+    name: tweaks.raceName || USER.raceName,
+    date: tweaks.raceDate || USER.raceDate,
+    distance: tweaks.raceDistance || USER.raceDistance,
+    target: tweaks.raceTargetTime || USER.raceTargetTime,
+    pace: tweaks.raceTargetPace || USER.raceTargetPace,
+    days: tweaks.daysToRace ?? USER.daysToRace,
+  };
+  const weeklyKm = tweaks.weeklyKm ?? USER.weeklyKm;
+  const longestRun = tweaks.longestRun ?? USER.longestRun;
+
+  // Parser blocco workout JSON dalla risposta del coach
+  const parseWorkoutBlock = (text) => {
+    const match = text.match(/```workout\s*([\s\S]*?)```/);
+    if (!match) return { cleanText: text, workout: null };
+    try {
+      const workout = JSON.parse(match[1].trim());
+      const cleanText = text.replace(/```workout[\s\S]*?```/, '').trim();
+      return { cleanText, workout };
+    } catch (e) {
+      return { cleanText: text, workout: null };
+    }
+  };
+
+  // ─── Calcolo metriche LIVE da Strava per il Coach ───────────────────────────
+  const stravaInsights = (() => {
+    if (!stravaActs || stravaActs.length === 0) return null;
+    try {
+      const trainingData = activitiesToTrainingData(stravaActs);
+      if (!trainingData.length) return null;
+      const loadHistory = calculateTrainingLoad(trainingData, 60);
+      const last = loadHistory[loadHistory.length - 1] || { ctl:0, atl:0, tsb:0 };
+      const safe = (v) => Number.isFinite(+v) ? +v : 0;
+      const ctl = safe(last.ctl), atl = safe(last.atl), tsb = safe(last.tsb);
+
+      // Ultimi 14 giorni
+      const now = Date.now();
+      const last14 = trainingData.filter(a => {
+        const t = new Date(a.date).getTime();
+        return Number.isFinite(t) && (now - t) <= 14 * 86400000;
+      });
+      const km14 = last14.reduce((s,a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
+
+      // Ultime 4 settimane medie
+      const last28 = trainingData.filter(a => {
+        const t = new Date(a.date).getTime();
+        return Number.isFinite(t) && (now - t) <= 28 * 86400000;
+      });
+      const km28 = last28.reduce((s,a) => s + (Number.isFinite(+a.distance_km) ? +a.distance_km : 0), 0);
+      const avgWeeklyKm = +(km28 / 4).toFixed(1);
+
+      // Ultime 5 corse riassunte
+      const recent = trainingData.slice(-5).reverse().map(a => {
+        const d = new Date(a.date);
+        const dStr = Number.isFinite(d.getTime())
+          ? `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`
+          : '—';
+        const km = Number.isFinite(+a.distance_km) ? +a.distance_km : 0;
+        const pace = a.avg_pace_sec_km
+          ? `${Math.floor(a.avg_pace_sec_km/60)}:${String(Math.round(a.avg_pace_sec_km%60)).padStart(2,'0')}/km`
+          : '—';
+        const hr = a.avg_hr ? `${Math.round(a.avg_hr)}bpm` : '';
+        const tss = Number.isFinite(+a.tss) ? `TSS ${Math.round(a.tss)}` : '';
+        return `- ${dStr}: ${km.toFixed(1)}km @ ${pace}${hr ? ' · FC ' + hr : ''}${tss ? ' · ' + tss : ''} (${a.name || a.type || 'Run'})`;
+      }).join('\n');
+
+      // Lungo più recente (≥ 14km)
+      const longRuns = trainingData.filter(a => Number.isFinite(+a.distance_km) && +a.distance_km >= 14);
+      const lastLong = longRuns[longRuns.length - 1];
+      const lastLongStr = lastLong
+        ? `${(+lastLong.distance_km).toFixed(1)}km @ ${lastLong.avg_pace_sec_km ? Math.floor(lastLong.avg_pace_sec_km/60)+':'+String(Math.round(lastLong.avg_pace_sec_km%60)).padStart(2,'0') : '—'}/km${lastLong.avg_hr ? ' · FC '+Math.round(lastLong.avg_hr)+'bpm' : ''} (${new Date(lastLong.date).toLocaleDateString('it-IT')})`
+        : 'nessuno negli ultimi mesi';
+
+      // Forma
+      const form = tsb > 5 ? 'fresco/scarico'
+                  : tsb > -10 ? 'in equilibrio'
+                  : tsb > -20 ? 'affaticato'
+                  : 'molto affaticato';
+
+      return {
+        ctl, atl, tsb, form,
+        km14: +km14.toFixed(1),
+        avgWeeklyKm,
+        runs28: last28.length,
+        recent,
+        lastLongStr,
+        totalActs: trainingData.length,
+      };
+    } catch (e) {
+      return null;
+    }
+  })();
+
+  // Contesto completo passato all'AI — ispirato al prompt "coach running per amatori"
+  const buildSystemContext = () => `Agisci come un coach running per runner amatori.
+
+STILE RISPOSTA
+- tono diretto, pratico, motivante ma non accondiscendente
+- niente teoria inutile
+- se qualcosa è rischioso, dillo chiaramente
+- usa emoji con moderazione
+- struttura sempre in sezioni chiare
+- dai piani concreti, non vaghi
+- quando scrivi allenamenti, usa formato Garmin copiabile
+- rispondi SEMPRE in italiano
+
+REGOLE COACH (non negoziabili)
+1. Priorità: continuità e prevenzione infortuni.
+2. Non proporre carichi aggressivi se c'è dolore o fatica.
+3. Se il runner salta allenamenti, ricalibra senza "recuperare tutto".
+4. Se c'è dolore a freddo o localizzato, consiglia stop/recupero — niente qualità.
+5. Distingui sempre: allenamento chiave / easy / lungo / recupero.
+6. Per ogni allenamento indica: obiettivo / struttura Garmin / ritmo target / cosa sentire / errori da evitare.
+7. Per gare indica: pacing per blocchi / strategia gel / segnali decisionali km 5 / km 10 / km 15.
+8. Usa SEMPRE ritmi realistici basati sui dati reali, non sugli obiettivi desiderati. Se i ritmi recenti su Strava non sono compatibili col target, dillo.
+9. Se i dati sono incoerenti, segnalalo (es. PB dichiarato non coerente con ritmi attuali).
+
+FORMATO ALLENAMENTO GARMIN (testo leggibile, sempre nello stesso ordine)
+- Nome allenamento
+- Riscaldamento
+- Blocco principale
+- Recuperi
+- Defaticamento
+- Target passo
+- Note pratiche
+
+ESEMPIO OUTPUT ATTESO
+
+# 🔴 MARTEDÌ — QUALITÀ CONTROLLATA
+
+🎯 Obiettivo:
+rendere familiare il ritmo gara senza accumulare fatica.
+
+📲 Garmin:
+1. Riscaldamento
+- 10:00 easy
+- passo libero
+
+2. Ripeti 3 volte:
+- Corsa: 2.00 km
+- Target passo: 5:30–5:35/km
+- Recupero: 2:00 jogging lento
+
+3. Defaticamento
+- 10:00 easy
+
+⚠️ Regole:
+- non andare sotto 5:25
+- se senti il polpaccio, interrompi
+- fatica massima 6/10
+
+🧠 Sensazione corretta:
+"sto lavorando ma controllo".
+
+─── PROFILO ATLETA ─────────────────────────────
+Nome: ${tweaks.userName || USER.name}
+Età: ${USER.age}
+Livello: ${USER.level}
+Allenamenti/settimana: 3
+Volume tipico: ${weeklyKm} km/sett
+Corsa più lunga fatta: ${longestRun} km
+Ritmo facile attuale: ${USER.currentEasyPace}
+
+─── GARA OBIETTIVO ──────────────────────────────
+${race.name} — ${race.date} (mancano ${race.days} giorni)
+Distanza: ${race.distance} km
+Target: ${race.target} (${race.pace})
+Scarpe gara: ${RACE_STRATEGY.shoes}
+
+─── PERSONAL BEST ───────────────────────────────
+5k: ${PB['5k'].time} (${PB['5k'].pace}) — ${PB['5k'].date}
+10k: ${PB['10k'].time} (${PB['10k'].pace}) — ${PB['10k'].date}
+21k: ${PB['21k'].time} (${PB['21k'].pace}) — ${PB['21k'].date}
+
+─── STIME GARA (Riegel) ─────────────────────────
+Conservativa: ${RACE_ESTIMATES.conservative.time} (${RACE_ESTIMATES.conservative.pace})
+Realistica:   ${RACE_ESTIMATES.realistic.time} (${RACE_ESTIMATES.realistic.pace})
+Ottimistica:  ${RACE_ESTIMATES.optimistic.time} (${RACE_ESTIMATES.optimistic.pace})
+
+─── STRATEGIA GARA CONCORDATA ───────────────────
+Strategia: Negative Split, target ${RACE_STRATEGY.target}
+${RACE_STRATEGY.phases.map(p => `- km ${p.km}: ${p.pace}/km — ${p.note}`).join('\n')}
+
+─── PIANO NUTRIZIONE ────────────────────────────
+${GEL_PLAN.map((g,i) => `${i+1}. ${g.when}: ${g.type} (${g.note})`).join('\n')}
+Idratazione: sempre acqua con ogni gel.
+
+─── ULTIMO LUNGO SIGNIFICATIVO ──────────────────
+${stravaInsights ? stravaInsights.lastLongStr : `${LONG_RUN_LAST.distance}km in ${LONG_RUN_LAST.time} (${LONG_RUN_LAST.pace}), FC media ${LONG_RUN_LAST.avgHR}.`}
+
+─── DATI STRAVA LIVE (ultimi 60 giorni) ─────────
+${stravaInsights ? `Attività totali importate: ${stravaInsights.totalActs}
+Volume ultimi 14 gg: ${stravaInsights.km14} km
+Media settimanale (4 sett): ${stravaInsights.avgWeeklyKm} km
+Corse ultime 4 settimane: ${stravaInsights.runs28}
+Forma attuale: CTL ${stravaInsights.ctl} · ATL ${stravaInsights.atl} · TSB ${stravaInsights.tsb >= 0 ? '+' : ''}${stravaInsights.tsb} (${stravaInsights.form})
+
+Ultime corse:
+${stravaInsights.recent}` : '⚠ Strava non collegato o nessuna attività disponibile — basa i suggerimenti sui PB e sulle informazioni che l\'utente ti dà.'}
+
+─── STATO ATTUALE ───────────────────────────────
+Settimana ${USER.currentWeek} di ${USER.weeksTotal} — FASE TAPER/scarico
+Recupero stimato: ${RECOVERY_DATA.score}/100
+Allenamento di oggi (suggerito dal piano): ${TODAY_WORKOUT.title} — ${TODAY_WORKOUT.distance}km @ ${TODAY_WORKOUT.targetPace}
+Dispositivo: Garmin ${USER.garminDevice}
+
+Rispondi SEMPRE in italiano. Sii coach vero, concreto, sicuro.
+
+─── GENERAZIONE ALLENAMENTI ─────────────────────
+Se l'utente ti chiede un allenamento, o se dai feedback sulle sue sensazioni/dati ti spinge a proporne uno nuovo, DEVI includere nella risposta un blocco JSON tra i marker \`\`\`workout e \`\`\` con questa struttura ESATTA:
+
+\`\`\`workout
+{
+  "title": "Nome breve dell'allenamento",
+  "type": "easy|tempo|intervals|long|recovery",
+  "distance_km": 6.5,
+  "duration_min": 42,
+  "target_pace": "5:40/km",
+  "rpe": "6/10",
+  "hr_zone": "Zona 2-3",
+  "warmup":   { "duration": "10 min", "desc": "Jogging lento + 4 allunghi", "pace": "6:30/km" },
+  "main_set": { "duration": "22 min", "desc": "3×1km @ 5:30 con 1' rec.", "pace": "5:30/km" },
+  "cooldown": { "duration": "10 min", "desc": "Defaticamento cammino+jogging", "pace": "6:45/km" },
+  "note": "Perché questo allenamento ORA (1-2 frasi, contestualizzato)",
+  "alt_easier": "Versione ridotta se stanco"
+}
+\`\`\`
+
+Regole per generare allenamenti:
+- Coerenti con la fase attuale del piano (siamo nella settimana ${USER.currentWeek}/${USER.weeksTotal} verso ${race.name})
+- BASATI SUI DATI STRAVA REALI mostrati sopra (CTL/ATL/TSB, ultime corse, ritmi reali, FC reale)
+- Adatta intensità a TSB: se < -15 proponi recupero/easy, se > +5 puoi inserire qualità
+- Se mancano X giorni alla gara (X = ${race.days}), comportati così:
+  • > 21gg: build (volume + qualità mista)
+  • 14-21gg: peak (lavori specifici a ritmo gara)
+  • 7-14gg: pre-taper (qualità ridotta, mantieni stimolo)
+  • ≤ 7gg: taper (solo attivazioni brevi, niente carico)
+- Ritmi compatibili con quelli osservati nelle ultime corse (non inventare ritmi più veloci di quelli che l'atleta corre già)
+- Prima del JSON, scrivi SEMPRE una breve spiegazione (2-4 frasi) del RAZIONALE: "guardando le tue ultime corse... il TSB di X mi dice... quindi oggi ti propongo..."
+- Dopo il JSON, nessun altro testo.
+
+PIANO SETTIMANALE
+Se l'utente chiede "il piano della settimana" o "cosa devo fare questa settimana", proponi 3 allenamenti distribuiti (es. martedì qualità, giovedì medio, domenica lungo) tenendo conto dei dati Strava degli ultimi 14 giorni. Per ogni giorno inserisci un blocco \`\`\`workout separato.
+
+Ora la persona ti scrive: ascolta e rispondi.`;
+
+  const send = async (text) => {
+    if (!text.trim()) return;
+    setInput('');
+    setMessages(p => [...p, { role:'user', text:text.trim() }]);
+    setTyping(true);
+
+    if (useRealAI) {
+      try {
+        const systemPrompt = buildSystemContext();
+        const history = messages
+          .filter(m => m.text && m.text.trim())
+          .slice(-10)
+          .map(m => ({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.text,
+          }));
+        const reply = await callCoachAI({
+          system: systemPrompt,
+          messages: [
+            ...history,
+            { role: 'user', content: text.trim() },
+          ],
+        });
+        setTyping(false);
+        const parsed = parseWorkoutBlock(String(reply).trim());
+        setMessages(p => [...p, { role:'coach', text: parsed.cleanText || 'Ecco il tuo allenamento:', workout: parsed.workout }]);
+        return;
+      } catch (err) {
+        console.error('Coach AI error', err);
+        setTyping(false);
+        const msg = (err && err.message) ? err.message : 'errore sconosciuto';
+        setMessages(p => [...p, { role:'coach', text:'Problema nella connessione con l\'AI (' + msg + '). Riprova tra un attimo.' }]);
+        return;
+      }
+    }
+
+    // Fallback risposte preimpostate
+    setTimeout(() => {
+      const reply = COACH_RESPONSES[text.trim()] || "Basandomi sui tuoi dati: sei in taper con recupero buono. Mantieni consistenza, non aggiungere volume, idratati e dormi bene. Lucca è vicina.";
+      setTyping(false);
+      setMessages(p => [...p, { role:'coach', text:reply }]);
+    }, 1400);
+  };
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      {/* Header */}
+      <div style={{ padding:'8px 20px 12px', flexShrink:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <div style={{ width:48, height:48, borderRadius:24, background:`linear-gradient(135deg, ${accent}, ${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', position:'relative', flexShrink:0 }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 5.92 2 10.8c0 2.96 1.56 5.6 4 7.28V22l3.6-2.4c.76.24 1.56.4 2.4.4 5.52 0 10-3.92 10-9.2S17.52 2 12 2z" fill="white" opacity="0.9"/></svg>
+            <div style={{ position:'absolute', bottom:2, right:2, width:12, height:12, borderRadius:6, background:C.teal, border:'2px solid #06060E' }}/>
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ color:C.text, fontSize:18, fontWeight:700 }}>Coach AI</div>
+            <div style={{ color:C.teal, fontSize:12, fontWeight:500 }}>
+              ● Online · {useRealAI ? 'Gemini AI' : 'Risposte preimpostate'}
+              {stravaActs && stravaActs.length > 0 && (
+                <span style={{ color:C.sub, marginLeft:6 }}>· 📊 {stravaActs.length} corse analizzate</span>
+              )}
+              {stravaActs && stravaActs.length === 0 && auth && (
+                <span style={{ color:'#fb923c', marginLeft:6 }}>· ⚠ no dati Strava</span>
+              )}
+              {stravaActs === null && auth && (
+                <span style={{ color:C.sub, marginLeft:6 }}>· caricamento Strava…</span>
+              )}
+            </div>
+          </div>
+          {onNav && (
+            <button onClick={() => onNav('race-settings')} title="Impostazioni gara" style={{ width:38, height:38, borderRadius:19, background:C.card2, border:`1px solid ${C.border2}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+          )}
+          {useRealAI && (
+            <div style={{ background:`${accent}22`, border:`1px solid ${accent}44`, color:accent, fontSize:10, fontWeight:700, padding:'4px 8px', borderRadius:6, letterSpacing:'0.05em' }}>LIVE</div>
+          )}
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div data-scroll="1" style={{ flex:1, overflowY:'auto', scrollbarWidth:'none', padding:'0 16px' }}>
+        {messages.map((m,i)=>(
+          <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start', marginBottom:14 }}>
+            {m.role==='coach' && (
+              <div style={{ width:32, height:32, borderRadius:16, background:`linear-gradient(135deg, ${accent}, ${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginRight:8, marginTop:2 }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 5.92 2 10.8c0 2.96 1.56 5.6 4 7.28V22l3.6-2.4c.76.24 1.56.4 2.4.4 5.52 0 10-3.92 10-9.2S17.52 2 12 2z"/></svg>
+              </div>
+            )}
+            <div style={{ maxWidth:'78%', background:m.role==='user'?accent:C.card2, border:m.role==='user'?'none':`1px solid ${C.border2}`, borderRadius:m.role==='user'?'18px 18px 4px 18px':'4px 18px 18px 18px', padding:'12px 16px' }}>
+              <p style={{ color:C.text, fontSize:14, lineHeight:1.6, margin:0, whiteSpace:'pre-wrap' }}>{m.text}</p>
+              {m.workout && (
+                <div style={{ marginTop:12, background:'rgba(0,0,0,0.25)', border:`1px solid ${accent}55`, borderRadius:14, padding:'12px 14px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
+                    <span style={{ fontSize:14 }}>🏃</span>
+                    <span style={{ color:accent, fontSize:10, fontWeight:800, letterSpacing:'0.08em' }}>ALLENAMENTO GENERATO</span>
+                  </div>
+                  <div style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:2 }}>{m.workout.title}</div>
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:8, marginBottom:10 }}>
+                    {m.workout.distance_km && <span style={{ background:'rgba(255,255,255,0.08)', color:C.text, fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:6 }}>{m.workout.distance_km} km</span>}
+                    {m.workout.duration_min && <span style={{ background:'rgba(255,255,255,0.08)', color:C.text, fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:6 }}>{m.workout.duration_min} min</span>}
+                    {m.workout.target_pace && <span style={{ background:`${accent}22`, color:accent, fontSize:11, fontWeight:700, padding:'3px 8px', borderRadius:6 }}>{m.workout.target_pace}</span>}
+                    {m.workout.rpe && <span style={{ background:'rgba(255,255,255,0.08)', color:C.sub, fontSize:11, padding:'3px 8px', borderRadius:6 }}>RPE {m.workout.rpe}</span>}
+                  </div>
+                  {['warmup','main_set','cooldown'].map(k => m.workout[k] && (
+                    <div key={k} style={{ borderLeft:`2px solid ${k==='main_set'?accent:C.teal}`, paddingLeft:10, marginBottom:8 }}>
+                      <div style={{ color:C.text, fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.05em' }}>
+                        {k==='warmup'?'Riscaldamento':k==='main_set'?'Parte centrale':'Defaticamento'} · {m.workout[k].duration}
+                      </div>
+                      <div style={{ color:C.sub, fontSize:11, lineHeight:1.45, marginTop:2 }}>{m.workout[k].desc}</div>
+                    </div>
+                  ))}
+                  {m.workout.note && <div style={{ color:C.faint, fontSize:11, fontStyle:'italic', marginTop:6, lineHeight:1.45 }}>💡 {m.workout.note}</div>}
+                  <div style={{ display:'flex', gap:6, marginTop:10 }}>
+                    <button onClick={() => alert('Workout salvato nel piano ✓')} style={{ flex:1, background:accent, border:'none', borderRadius:8, color:'white', fontSize:11, fontWeight:700, padding:'8px', cursor:'pointer' }}>+ Piano</button>
+                    <button onClick={() => alert('Inviato a Garmin ✓')} style={{ flex:1, background:'rgba(255,255,255,0.08)', border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:11, fontWeight:600, padding:'8px', cursor:'pointer' }}>↗ Garmin</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {typing && (
+          <div style={{ display:'flex', justifyContent:'flex-start', marginBottom:14 }}>
+            <div style={{ width:32, height:32, borderRadius:16, background:`linear-gradient(135deg, ${accent}, ${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginRight:8 }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 5.92 2 10.8c0 2.96 1.56 5.6 4 7.28V22l3.6-2.4c.76.24 1.56.4 2.4.4 5.52 0 10-3.92 10-9.2S17.52 2 12 2z"/></svg>
+            </div>
+            <div style={{ background:C.card2, border:`1px solid ${C.border2}`, borderRadius:'4px 18px 18px 18px', padding:'12px 18px', display:'flex', gap:6, alignItems:'center' }}>
+              {[0,1,2].map(j=><div key={j} style={{ width:7, height:7, borderRadius:4, background:C.sub, animation:`bounce 1s ${j*0.2}s infinite` }}/>)}
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef}/>
+      </div>
+
+      {/* Suggestions */}
+      <div style={{ padding:'8px 16px 6px', flexShrink:0 }}>
+        <div style={{ display:'flex', gap:7, overflowX:'auto', scrollbarWidth:'none', paddingBottom:2 }}>
+          {SUGGESTIONS.map((s,i)=>(
+            <button key={i} onClick={()=>send(s)} style={{ flexShrink:0, background:C.card2, border:`1px solid ${C.border2}`, borderRadius:22, padding:'8px 14px', color:C.sub, fontSize:12, fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>{s}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Input */}
+      <div style={{ padding:'6px 14px 10px', flexShrink:0, display:'flex', gap:8 }}>
+        <input value={input} onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>e.key==='Enter'&&send(input)}
+          placeholder="Chiedi qualcosa al tuo coach..."
+          style={{ flex:1, height:50, background:C.card2, border:`1px solid ${C.border2}`, borderRadius:25, padding:'0 20px', color:C.text, fontSize:14, outline:'none', fontFamily:'DM Sans,sans-serif' }}/>
+        <button onClick={()=>send(input)} style={{ width:50, height:50, borderRadius:25, background:accent, border:'none', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 4px 14px ${accent}44`, flexShrink:0 }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+        </button>
+      </div>
+      <style>{`@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}`}</style>
+    </div>
+  );
+}
+
+// ─── Progress ─────────────────────────────────────────────────────────────────
+function ProgressScreenM({ tweaks }) {
+  const accent = tweaks.accentColor || C.orange;
+  const p = PROGRESS_DATA;
+  return (
+    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
+      <div style={{ padding:'8px 20px 14px' }}>
+        <div style={{ color:C.sub, fontSize:13, marginBottom:2 }}>Progressi</div>
+        <div style={{ color:C.text, fontSize:22, fontWeight:700, letterSpacing:'-0.4px' }}>Il Tuo Percorso</div>
+      </div>
+
+      {/* Readiness hero */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <div style={{ background:`linear-gradient(135deg, ${accent}20, ${C.purple}14)`, border:`1px solid ${accent}33`, borderRadius:20, padding:'20px 20px' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+            <div>
+              <div style={{ color:C.sub, fontSize:11, fontWeight:500, letterSpacing:'0.06em', marginBottom:8 }}>PRONTEZZA GARA</div>
+              <div style={{ color:C.text, fontSize:48, fontWeight:800, letterSpacing:'-1px', lineHeight:1 }}>{p.readinessScore}<span style={{ fontSize:20, color:C.sub, fontWeight:500 }}>%</span></div>
+              <div style={{ color:C.sub, fontSize:13, marginTop:8 }}>Arrivo previsto <span style={{ color:accent, fontWeight:600 }}>{p.projectedFinish}</span></div>
+            </div>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ color:accent, fontSize:32, fontWeight:800 }}>{p.raceCountdown}</div>
+              <div style={{ color:C.sub, fontSize:12 }}>giorni a Lucca</div>
+            </div>
+          </div>
+          <div style={{ marginTop:18, height:6, background:'rgba(255,255,255,0.1)', borderRadius:3 }}>
+            <div style={{ height:'100%', width:`${p.readinessScore}%`, background:`linear-gradient(90deg, ${accent}, ${C.yellow})`, borderRadius:3 }}/>
+          </div>
+          <div style={{ display:'flex', justifyContent:'space-between', marginTop:5 }}>
+            <span style={{ color:C.faint, fontSize:11 }}>Non pronta</span>
+            <span style={{ color:C.faint, fontSize:11 }}>Pronta</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ padding:'0 14px 14px', display:'flex', gap:8 }}>
+        {[{label:'Costanza',val:`${p.consistency}%`,sub:'Ultime 4 settimane',color:C.teal},{label:'Aderenza',val:`${p.adherence}%`,sub:'Sessioni eseguite',color:accent},{label:'Corse Totali',val:`${p.totalRuns}`,sub:'Questo ciclo',color:C.blue}].map(s=>(
+          <Card key={s.label} style={{ flex:1, cursor:'default' }}>
+            <div style={{ padding:'14px 12px', textAlign:'center' }}>
+              <div style={{ color:s.color, fontSize:22, fontWeight:800 }}>{s.val}</div>
+              <div style={{ color:C.text, fontSize:12, fontWeight:600, marginTop:3 }}>{s.label}</div>
+              <div style={{ color:C.faint, fontSize:10, marginTop:2 }}>{s.sub}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Weekly mileage */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <Card style={{ cursor:'default' }}>
+          <div style={{ padding:'16px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+              <div style={{ color:C.text, fontSize:15, fontWeight:600 }}>Chilometraggio Settimanale</div>
+              <div style={{ color:C.sub, fontSize:13 }}>Questa sett. <span style={{ color:accent, fontWeight:700 }}>{p.weeklyMiles[p.weeklyMiles.length-1]} km</span></div>
+            </div>
+            <BarChart data={p.weeklyMiles} labels={p.weekLabels} color={accent} height={64}/>
+          </div>
+        </Card>
+      </div>
+
+      {/* Pace trend */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <Card style={{ cursor:'default' }}>
+          <div style={{ padding:'16px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+              <div style={{ color:C.text, fontSize:15, fontWeight:600 }}>Tendenza Ritmo</div>
+              <div style={{ color:C.teal, fontSize:12, fontWeight:600 }}>↓ In miglioramento</div>
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+              <div>
+                <div style={{ color:C.faint, fontSize:11, marginBottom:4 }}>7 sett. fa</div>
+                <div style={{ color:C.sub, fontSize:17, fontWeight:700 }}>6:06/km</div>
+              </div>
+              <SparkLine data={p.paceHistory.map(v=>-v)} color={C.teal} width={140} height={40}/>
+              <div style={{ textAlign:'right' }}>
+                <div style={{ color:C.faint, fontSize:11, marginBottom:4 }}>Questa sett.</div>
+                <div style={{ color:C.teal, fontSize:17, fontWeight:700 }}>5:43/km</div>
+              </div>
+            </div>
+            <div style={{ color:C.faint, fontSize:12, marginTop:8 }}>−23 sec/km in 7 settimane</div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Long run progress */}
+      <div style={{ padding:'0 14px 24px' }}>
+        <Card style={{ cursor:'default' }}>
+          <div style={{ padding:'16px' }}>
+            <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:14 }}>Progressione del Lungo</div>
+            <div style={{ display:'flex', gap:4, alignItems:'flex-end', height:64 }}>
+              {[22,26,28,30,32,28,14].map((km,i)=>(
+                <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+                  <div style={{ width:'100%', height:(km/32)*56, background:i===6?C.blue:'rgba(77,158,255,0.25)', borderRadius:'4px 4px 0 0', minHeight:4 }}/>
+                  <div style={{ color:C.faint, fontSize:10 }}>{km}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ color:C.faint, fontSize:12, marginTop:4 }}>km per lungo · Gara: 42.195km il 3 maggio</div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── Recovery ─────────────────────────────────────────────────────────────────
+function RecoveryScreenM({ tweaks }) {
+  const accent = tweaks.accentColor || C.orange;
+  const rec = { ...RECOVERY_DATA, score: tweaks.recoveryScore ?? RECOVERY_DATA.score };
+  const recColor = rec.score >= 80 ? C.teal : rec.score >= 60 ? accent : '#FF4466';
+  const recLabel = rec.score >= 80 ? 'Eccellente' : rec.score >= 60 ? 'Buono' : 'Basso';
+  const recId = rec.score >= 80 ? 'go_as_planned' : rec.score >= 60 ? 'go_as_planned' : rec.score >= 45 ? 'reduce' : 'rest';
+
+  const RECS = [
+    { id:'go_as_planned', icon:'✅', label:'Vai come Previsto',   desc:'Il recupero è sufficiente. Esegui l\'allenamento pianificato.' },
+    { id:'reduce',        icon:'⬇',  label:'Riduci Intensità',    desc:'Sostituisci la sessione di oggi con la versione più facile.' },
+    { id:'easy_only',     icon:'🚶', label:'Solo Corsa Facile',   desc:'Solo Zona 1–2, massimo 20–30 min.' },
+    { id:'rest',          icon:'🛌', label:'Riposo / Mobilità',   desc:'Riposo completo o solo lavoro di mobilità leggera.' },
+  ];
+
+  return (
+    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
+      <div style={{ padding:'8px 20px 14px' }}>
+        <div style={{ color:C.sub, fontSize:13, marginBottom:2 }}>Recupero e Prontezza</div>
+        <div style={{ color:C.text, fontSize:22, fontWeight:700, letterSpacing:'-0.4px' }}>Stato Odierno</div>
+      </div>
+
+      {/* Big score */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <Card style={{ cursor:'default', background:`linear-gradient(135deg, ${recColor}12, #0D0D1C)` }}>
+          <div style={{ padding:'24px 20px', display:'flex', alignItems:'center', gap:20 }}>
+            <div style={{ position:'relative', width:100, height:100, flexShrink:0 }}>
+              <RecoveryRing score={rec.score} size={100} stroke={8}/>
+              <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+                <div style={{ color:recColor, fontSize:28, fontWeight:800, lineHeight:1 }}>{rec.score}</div>
+                <div style={{ color:C.faint, fontSize:10, marginTop:1 }}>/ 100</div>
+              </div>
+            </div>
+            <div>
+              <div style={{ color:recColor, fontSize:22, fontWeight:700, marginBottom:6 }}>{recLabel}</div>
+              <div style={{ color:C.sub, fontSize:13, lineHeight:1.55, marginBottom:10 }}>Basato su sonno, HRV, frequenza cardiaca a riposo e carico.</div>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:C.blueDim, border:`1px solid ${C.blue}33`, borderRadius:8, padding:'5px 10px' }}>
+                <div style={{ width:6, height:6, borderRadius:3, background:C.blue }}/>
+                <span style={{ color:C.blue, fontSize:11, fontWeight:500 }}>Garmin · {USER.garminSyncAgo}</span>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Garmin metrics */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:10 }}>Metriche Garmin</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+          {[
+            { label:'HRV', val:`${rec.hrv} ms`, trend:'↑ +4', good:true, icon:'💓' },
+            { label:'FC a Riposo', val:`${rec.restingHR} bpm`, trend:'→ stabile', good:null, icon:'❤' },
+            { label:'Sonno', val:`${rec.sleep}h`, trend:rec.sleepQuality, good:true, icon:'🌙' },
+            { label:'Carico Allena.', val:rec.trainingLoad, trend:'Gestibile', good:true, icon:'⚡' },
+          ].map(m=>(
+            <Card key={m.label} style={{ cursor:'default' }}>
+              <div style={{ padding:'16px' }}>
+                <div style={{ fontSize:20, marginBottom:8 }}>{m.icon}</div>
+                <div style={{ color:C.text, fontSize:17, fontWeight:700 }}>{m.val}</div>
+                <div style={{ color:C.faint, fontSize:12, marginTop:2 }}>{m.label}</div>
+                <div style={{ color:m.good===true?C.teal:m.good===false?'#FF6450':C.sub, fontSize:12, fontWeight:500, marginTop:4 }}>{m.trend}</div>
               </div>
             </Card>
           ))}
         </div>
       </div>
 
-      <div style={{ height: 12 }} />
-    </div>
-  );
-}
-
-// ─── Workout Detail Screen ────────────────────────────────────────────────────
-function WorkoutScreen({ workout, onBack, tweaks }) {
-  const accent = tweaks.accentColor || C.orange;
-  const [showAlt, setShowAlt] = useState(false);
-  const [sentToGarmin, setSentToGarmin] = useState(false);
-  const [marked, setMarked] = useState(false);
-  const w = workout || TODAY_WORKOUT;
-
-  const phases = [
-    { ...w.warmup,  bg: C.tealDim,  border: C.teal,   icon:'🌡' },
-    { ...w.mainSet, bg: accent+'18', border: accent,   icon:'⚡' },
-    { ...w.cooldown,bg: C.tealDim,  border: C.teal,   icon:'🌊' },
-  ];
-
-  return (
-    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
-      <DynamicIsland />
-      <StatusBar />
-
-      {/* Header */}
-      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 16px 14px' }}>
-        <button onClick={onBack} style={{ width:36, height:36, borderRadius:18, background:'rgba(255,255,255,0.07)', border:`1px solid ${C.border}`, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke={C.text} strokeWidth="2" strokeLinecap="round"/></svg>
-        </button>
-        <div>
-          <TypeBadge type={w.type} />
-          <div style={{ color: C.text, fontSize:18, fontWeight:700, letterSpacing:'-0.3px', marginTop:3 }}>{w.title}</div>
-        </div>
-      </div>
-
-      {/* Key metrics */}
-      <div style={{ padding:'0 16px 14px', display:'flex', gap:8 }}>
-        {[
-          { val:`${w.distance} km`, lbl:'Distanza' },
-          { val:`${w.duration} min`, lbl:'Durata' },
-          { val: w.rpe, lbl:'RPE' },
-          { val: w.hrZone, lbl:'Zona FC' },
-        ].map(m => (
-          <div key={m.lbl} style={{ flex:1, background: C.card2, border:`1px solid ${C.border}`, borderRadius:12, padding:'10px 8px', textAlign:'center' }}>
-            <div style={{ color: C.text, fontSize:13, fontWeight:700 }}>{m.val}</div>
-            <div style={{ color: C.faint, fontSize:10, marginTop:2 }}>{m.lbl}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Phase breakdown */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <div style={{ color: C.text, fontSize:14, fontWeight:600, marginBottom:10 }}>Struttura della Sessione</div>
-        {/* Timeline bar */}
-        <div style={{ display:'flex', gap:2, height:6, borderRadius:3, overflow:'hidden', marginBottom:14 }}>
-          <div style={{ flex:10, background: C.teal, borderRadius:3 }} />
-          <div style={{ flex:25, background: accent, borderRadius:3 }} />
-          <div style={{ flex:10, background: C.teal, borderRadius:3 }} />
-        </div>
-        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-          {phases.map((p, i) => (
-            <div key={i} style={{ background: p.bg, border:`1px solid ${p.border}33`, borderRadius:14, padding:'14px 14px' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <span style={{ fontSize:16 }}>{p.icon}</span>
-                  <span style={{ color: C.text, fontSize:14, fontWeight:600 }}>{p.label}</span>
-                </div>
-                <span style={{ color: p.border, fontSize:13, fontWeight:600 }}>{p.duration}</span>
+      {/* Recommendation */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:10 }}>Raccomandazione Odierna</div>
+        {RECS.map(r=>{
+          const isActive = r.id===recId;
+          return (
+            <div key={r.id} style={{ display:'flex', alignItems:'center', gap:14, background:isActive?`${recColor}18`:'rgba(255,255,255,0.04)', border:`1px solid ${isActive?`${recColor}44`:C.border}`, borderRadius:16, padding:'14px 16px', marginBottom:8 }}>
+              <div style={{ width:40, height:40, borderRadius:20, background:isActive?`${recColor}22`:'rgba(255,255,255,0.05)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, flexShrink:0 }}>{r.icon}</div>
+              <div style={{ flex:1 }}>
+                <div style={{ color:isActive?recColor:C.sub, fontSize:14, fontWeight:isActive?700:500 }}>{r.label}</div>
+                <div style={{ color:C.faint, fontSize:12, marginTop:3, lineHeight:1.45 }}>{r.desc}</div>
               </div>
-              <div style={{ color: C.sub, fontSize:12, lineHeight:1.5, marginBottom:6 }}>{p.desc}</div>
-              <div style={{ display:'flex', gap:8 }}>
-                <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:6, padding:'4px 8px' }}>
-                  <span style={{ color: C.faint, fontSize:10 }}>Pace </span>
-                  <span style={{ color: C.text, fontSize:10, fontWeight:600 }}>{p.pace}</span>
-                </div>
-                <div style={{ background:'rgba(255,255,255,0.06)', borderRadius:6, padding:'4px 8px' }}>
-                  <span style={{ color: C.faint, fontSize:10 }}>Zone </span>
-                  <span style={{ color: C.text, fontSize:10, fontWeight:600 }}>{p.zone}</span>
-                </div>
-              </div>
+              {isActive && <div style={{ width:8, height:8, borderRadius:4, background:recColor, flexShrink:0 }}/>}
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
-      {/* Coach note */}
-      <div style={{ padding:'0 16px 14px' }}>
+      {/* Load trend */}
+      <div style={{ padding:'0 14px 24px' }}>
         <Card style={{ cursor:'default' }}>
-          <div style={{ padding:'14px' }}>
-            <div style={{ color: accent, fontSize:12, fontWeight:600, marginBottom:6, letterSpacing:'0.04em' }}>NOTA DEL COACH</div>
-            <p style={{ color: C.text, fontSize:13, lineHeight:1.65, margin:0 }}>{w.coachNote}</p>
+          <div style={{ padding:'16px' }}>
+            <div style={{ color:C.text, fontSize:14, fontWeight:600, marginBottom:12 }}>Tendenza Carico Settimanale</div>
+            <div style={{ display:'flex', gap:4, alignItems:'flex-end', height:44, marginBottom:8 }}>
+              {[55,60,58,65,62,70,68].map((v,i)=>(
+                <div key={i} style={{ flex:1, height:`${(v/70)*100}%`, background:i===6?recColor:'rgba(255,255,255,0.12)', borderRadius:'3px 3px 0 0', opacity:i===6?1:0.6 }}/>
+              ))}
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:10 }}>
+              <span style={{ color:C.faint, fontSize:11 }}>7 giorni fa</span>
+              <span style={{ color:recColor, fontSize:11, fontWeight:600 }}>Oggi</span>
+            </div>
+            <div style={{ color:C.sub, fontSize:13, lineHeight:1.55 }}>
+              Il carico è <span style={{ color:recColor, fontWeight:600 }}>moderato</span> e la tendenza è stabile. Nessun rischio di sovraccarico. Le ripetute di venerdì e il lungo di sabato sono confermati.
+            </div>
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
 
-      {/* Mistakes to avoid */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <div style={{ color: C.text, fontSize:14, fontWeight:600, marginBottom:8 }}>Errori da Evitare</div>
-        {w.avoid.map((a,i) => (
-          <div key={i} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
-            <div style={{ width:18, height:18, borderRadius:9, background:'rgba(255,100,80,0.15)', border:'1px solid rgba(255,100,80,0.3)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="#FF6450" strokeWidth="2.5" strokeLinecap="round"/></svg>
+// ─── Race Settings ────────────────────────────────────────────────────────────
+function RaceSettingsScreenM({ tweaks, onChange, onBack }) {
+  const accent = tweaks.accentColor || C.orange;
+
+  const fields = [
+    { group: 'Gara',        key: 'raceName',       label: 'Nome gara',              placeholder: USER.raceName,         type: 'text' },
+    { group: 'Gara',        key: 'raceDate',       label: 'Data gara',              placeholder: USER.raceDate,         type: 'date' },
+    { group: 'Gara',        key: 'raceDistance',   label: 'Distanza (km)',          placeholder: String(USER.raceDistance),    type: 'number', step: '0.01' },
+    { group: 'Gara',        key: 'daysToRace',     label: 'Giorni al via',          placeholder: String(USER.daysToRace),      type: 'number' },
+    { group: 'Obiettivo',   key: 'raceTargetTime', label: 'Tempo target',           placeholder: USER.raceTargetTime,   type: 'text' },
+    { group: 'Obiettivo',   key: 'raceTargetPace', label: 'Ritmo target',           placeholder: USER.raceTargetPace,   type: 'text' },
+    { group: 'Atleta',      key: 'userName',       label: 'Nome',                   placeholder: USER.name,             type: 'text' },
+    { group: 'Atleta',      key: 'weeklyKm',       label: 'Volume sett. (km)',      placeholder: String(USER.weeklyKm),        type: 'number' },
+    { group: 'Atleta',      key: 'longestRun',     label: 'Corsa più lunga (km)',   placeholder: String(USER.longestRun),      type: 'number' },
+  ];
+
+  const groups = [...new Set(fields.map(f => f.group))];
+
+  const setVal = (key, type, v) => {
+    if (v === '' || v === null || v === undefined) {
+      onChange(key, undefined);
+      return;
+    }
+    if (type === 'number') {
+      const n = parseFloat(v);
+      onChange(key, isNaN(n) ? v : n);
+    } else {
+      onChange(key, v);
+    }
+  };
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      {/* Header */}
+      <div style={{ padding:'8px 16px 12px', flexShrink:0, display:'flex', alignItems:'center', gap:10 }}>
+        <button onClick={onBack} style={{ width:38, height:38, borderRadius:19, background:C.card2, border:`1px solid ${C.border2}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', flexShrink:0 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <div style={{ flex:1 }}>
+          <div style={{ color:C.text, fontSize:18, fontWeight:700 }}>Impostazioni Gara</div>
+          <div style={{ color:C.sub, fontSize:12 }}>Questi dati alimentano il Coach AI</div>
+        </div>
+      </div>
+
+      {/* Scroll */}
+      <div data-scroll="1" style={{ flex:1, overflowY:'auto', scrollbarWidth:'none', padding:'0 16px 24px' }}>
+        {groups.map(g => (
+          <div key={g} style={{ marginBottom:20 }}>
+            <div style={{ color:C.faint, fontSize:10, fontWeight:800, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8, padding:'0 4px' }}>{g}</div>
+            <div style={{ background:C.card2, border:`1px solid ${C.border2}`, borderRadius:14, overflow:'hidden' }}>
+              {fields.filter(f => f.group === g).map((f,i,arr) => (
+                <div key={f.key} style={{ padding:'12px 14px', borderBottom: i === arr.length-1 ? 'none' : `1px solid ${C.border2}` }}>
+                  <label style={{ color:C.sub, fontSize:11, fontWeight:600, display:'block', marginBottom:4 }}>{f.label}</label>
+                  <input
+                    type={f.type}
+                    step={f.step}
+                    value={tweaks[f.key] ?? ''}
+                    onChange={e => setVal(f.key, f.type, e.target.value)}
+                    placeholder={f.placeholder}
+                    style={{ width:'100%', background:'transparent', border:'none', outline:'none', color:C.text, fontSize:15, fontWeight:500, fontFamily:'DM Sans,sans-serif', padding:0 }}
+                  />
+                </div>
+              ))}
             </div>
-            <span style={{ color: C.sub, fontSize:13 }}>{a}</span>
           </div>
         ))}
-      </div>
 
-      {/* Alt easier version */}
-      <div style={{ padding:'0 16px 14px' }}>
-        <button onClick={() => setShowAlt(!showAlt)} style={{ width:'100%', background: C.card2, border:`1px solid ${C.border}`, borderRadius:12, padding:'12px 14px', cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span style={{ color: C.sub, fontSize:13, fontWeight:500 }}>⬇ Versione Più Facile</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ transform: showAlt ? 'rotate(180deg)' : 'none', transition:'transform 0.2s' }}><path d="M6 9l6 6 6-6" stroke={C.sub} strokeWidth="2" strokeLinecap="round"/></svg>
-        </button>
-        {showAlt && (
-          <div style={{ background: C.tealDim, border:`1px solid ${C.teal}33`, borderRadius:'0 0 12px 12px', padding:'12px 14px', marginTop:-4 }}>
-            <div style={{ color: C.teal, fontSize:12, fontWeight:600, marginBottom:4 }}>{w.altEasy.title}</div>
-            <div style={{ color: C.sub, fontSize:12, lineHeight:1.5 }}>{w.altEasy.desc}</div>
-            <div style={{ color: C.faint, fontSize:11, marginTop:4 }}>Total: {w.altEasy.total}</div>
+        {/* AI toggle */}
+        <div style={{ marginBottom:20 }}>
+          <div style={{ color:C.faint, fontSize:10, fontWeight:800, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8, padding:'0 4px' }}>Coach AI</div>
+          <div style={{ background:C.card2, border:`1px solid ${C.border2}`, borderRadius:14, padding:'14px', display:'flex', alignItems:'center', gap:12 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ color:C.text, fontSize:14, fontWeight:600 }}>Coach AI (Gemini)</div>
+              <div style={{ color:C.sub, fontSize:12, marginTop:2 }}>Risposte generate in tempo reale con i tuoi dati Strava</div>
+            </div>
+            <button
+              onClick={() => onChange('claudeAI', tweaks.claudeAI === false)}
+              style={{ width:48, height:28, borderRadius:14, background: tweaks.claudeAI === false ? C.border2 : accent, border:'none', position:'relative', cursor:'pointer', transition:'background 0.2s', flexShrink:0 }}
+            >
+              <div style={{ position:'absolute', top:2, left: tweaks.claudeAI === false ? 2 : 22, width:24, height:24, borderRadius:12, background:'white', transition:'left 0.2s', boxShadow:'0 2px 6px rgba(0,0,0,0.3)' }}/>
+            </button>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* Actions */}
-      <div style={{ padding:'0 16px 24px', display:'flex', gap:10 }}>
-        <button onClick={() => setSentToGarmin(true)} style={{
-          flex:1, height:50, background: sentToGarmin ? C.blueDim : 'rgba(255,255,255,0.06)',
-          border:`1px solid ${sentToGarmin ? C.blue+'66' : C.border}`, borderRadius:12,
-          color: sentToGarmin ? C.blue : C.sub, fontSize:13, fontWeight:600, cursor:'pointer',
-          display:'flex', alignItems:'center', justifyContent:'center', gap:6,
-        }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke={sentToGarmin ? C.blue : C.sub} strokeWidth="1.8" strokeLinejoin="round"/></svg>
-          {sentToGarmin ? 'Inviato a Garmin ✓' : 'Invia a Garmin'}
-        </button>
-        <button onClick={() => setMarked(true)} style={{
-          flex:1, height:50, background: marked ? C.tealDim : accent,
-          border:`1px solid ${marked ? C.teal+'66' : 'transparent'}`, borderRadius:12,
-          color: marked ? C.teal : 'white', fontSize:13, fontWeight:700, cursor:'pointer',
-          boxShadow: marked ? 'none' : `0 4px 20px ${accent}44`,
-        }}>
-          {marked ? '✓ Completato' : 'Segna Completato'}
+        {/* Reset */}
+        <button
+          onClick={() => {
+            if (confirm('Ripristinare tutti i valori default?')) {
+              ['raceName','raceDate','raceDistance','daysToRace','raceTargetTime','raceTargetPace','userName','weeklyKm','longestRun'].forEach(k => onChange(k, undefined));
+            }
+          }}
+          style={{ width:'100%', background:'transparent', border:`1px solid ${C.border2}`, borderRadius:12, padding:'12px', color:C.sub, fontSize:13, fontWeight:600, cursor:'pointer' }}
+        >
+          Ripristina default
         </button>
       </div>
     </div>
   );
 }
 
-Object.assign(window, { HomeScreen, WorkoutScreen });
+Object.assign(window, { PlanScreenM, CoachScreenM, ProgressScreenM, RecoveryScreenM, RaceSettingsScreenM });

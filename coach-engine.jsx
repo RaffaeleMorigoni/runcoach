@@ -1,419 +1,127 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>RunCoach AI</title>
+// js/chart-components.jsx — Componenti chart aggiuntivi (RacePredictionCard)
+const { useMemo: useMemoCC } = React;
 
-  <!-- PWA -->
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#06060E">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="RunCoach">
-  <link rel="apple-touch-icon" href="icon-192.png">
-
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
-
-  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-
-  <style>
-    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
-    html { height: 100%; }
-    body {
-      height: 100%;
-      font-family: 'DM Sans', sans-serif;
-      background: #06060E;
-      color: #EEEEF8;
-      overflow: hidden;
-      /* Safe area for notch / home indicator */
-      padding-top: env(safe-area-inset-top);
-      padding-bottom: env(safe-area-inset-bottom);
-    }
-    #root {
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-    }
-    ::-webkit-scrollbar { display: none; }
-    * { -webkit-tap-highlight-color: transparent; }
-    input, button { font-family: 'DM Sans', sans-serif; }
-    input::placeholder { color: rgba(238,238,248,0.3); }
-    button { -webkit-appearance: none; }
-
-    /* Splash screen */
-    #splash {
-      position: fixed; inset: 0;
-      background: #06060E;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      gap: 16px; z-index: 999;
-      transition: opacity 0.4s ease;
-    }
-    #splash.hidden { opacity: 0; pointer-events: none; }
-    .splash-icon {
-      width: 80px; height: 80px; border-radius: 22px;
-      background: linear-gradient(135deg, #12122A, #06060E);
-      border: 1px solid rgba(255,68,34,0.3);
-      display: flex; align-items: center; justify-content: center;
-    }
-    .splash-title { color: #EEEEF8; font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
-    .splash-sub   { color: rgba(238,238,248,0.45); font-size: 13px; }
-
-    /* SW install banner */
-    #install-banner {
-      display: none;
-      position: fixed; bottom: calc(env(safe-area-inset-bottom) + 80px); left: 14px; right: 14px;
-      background: #111126; border: 1px solid rgba(255,68,34,0.3);
-      border-radius: 16px; padding: 14px 16px;
-      z-index: 500; align-items: center; gap: 12px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    }
-    #install-banner.show { display: flex; }
-  </style>
-</head>
-<body>
-
-<!-- Splash -->
-<div id="splash">
-  <div class="splash-icon">
-    <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-      <path d="M13 4C13 5.1 13.9 6 15 6C16.1 6 17 5.1 17 4C17 2.9 16.1 2 15 2C13.9 2 13 2.9 13 4Z" fill="#FF4422"/>
-      <path d="M5.5 18.5L8 13L11 16L13 10L16.5 18.5" stroke="#FF4422" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
-  </div>
-  <div class="splash-title">RunCoach AI</div>
-  <div class="splash-sub">Caricamento in corso…</div>
-</div>
-
-<!-- App root -->
-<div id="root"></div>
-
-<!-- Install banner -->
-<div id="install-banner">
-  <div style="font-size:24px">📲</div>
-  <div style="flex:1">
-    <div style="font-weight:600;font-size:13px">Aggiungi alla Home</div>
-    <div style="color:rgba(238,238,248,0.5);font-size:11px;margin-top:2px">Usa come app nativa su iPhone</div>
-  </div>
-  <button id="install-btn" style="background:#FF4422;border:none;color:white;font-weight:700;font-size:12px;padding:8px 14px;border-radius:10px;cursor:pointer">Installa</button>
-  <button id="dismiss-btn" style="background:none;border:none;color:rgba(238,238,248,0.4);font-size:18px;cursor:pointer;padding:4px">✕</button>
-</div>
-
-<script type="text/babel" src="js/shared.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260503e"></script>
-<script type="text/babel" src="js/workout-picker.jsx?v=20260503e"></script>
-
-<script type="text/babel">
-const { useState, useEffect } = React;
-
-const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "accentColor": "#FF4422",
-  "userName": "Sarah",
-  "recoveryScore": 78,
-  "garminConnected": true,
-  "claudeAI": true,
-  "raceName": "Mezza Maratona di Lucca",
-  "raceDate": "3 Maggio 2026",
-  "raceDistance": 21.097,
-  "raceTargetTime": "1:58:00",
-  "raceTargetPace": "5:35/km",
-  "weeklyKm": 25,
-  "longestRun": 18
-}/*EDITMODE-END*/;
-
-// ─── Mobile bottom nav ────────────────────────────────────────────────────────
-function MobileBottomNav({ current, onChange }) {
-  const accent = '#FF4422';
-  const tabs = [
-    { id:'home',     label:'Oggi',      icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 12L12 3L21 12V20C21 20.55 20.55 21 20 21H15V16H9V21H4C3.45 21 3 20.55 3 20V12Z" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinejoin="round" fill={a?`${accent}22`:'none'}/></svg> },
-    { id:'plan',     label:'Piano',     icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="17" rx="3" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" fill={a?`${accent}22`:'none'}/><path d="M3 9H21" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75"/><path d="M8 2V6M16 2V6" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/><path d="M7 14H9M11 14H13M15 14H17M7 17H9M11 17H13" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/></svg> },
-    { id:'coach',    label:'Coach',     icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 5.92 2 10.8C2 13.76 3.56 16.4 6 18.08V22L9.6 19.6C10.36 19.84 11.16 20 12 20C17.52 20 22 16.08 22 10.8S17.52 2 12 2Z" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" fill={a?`${accent}22`:'none'}/><circle cx="8" cy="11" r="1.2" fill={a?accent:'rgba(238,238,248,0.3)'}/><circle cx="12" cy="11" r="1.2" fill={a?accent:'rgba(238,238,248,0.3)'}/><circle cx="16" cy="11" r="1.2" fill={a?accent:'rgba(238,238,248,0.3)'}/></svg> },
-    { id:'progress', label:'Progressi', icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 17L8 11L13 14L19 6" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/><path d="M20 6H15M20 6V11" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/></svg> },
-    { id:'workouts', label:'Workout',   icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 4v16M18 4v16M3 8h18M3 16h18" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/><circle cx="12" cy="12" r="2.5" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" fill={a?`${accent}22`:'none'}/></svg> },
-  ];
-
-  return (
-    <div style={{
-      display:'flex', justifyContent:'space-around', alignItems:'center',
-      padding:'10px 0 0',
-      background:'#0D0D1C',
-      borderTop:'1px solid rgba(255,255,255,0.07)',
-      flexShrink:0,
-    }}>
-      {tabs.map(t => {
-        const active = current === t.id;
-        return (
-          <button key={t.id} onClick={() => onChange(t.id)} style={{
-            flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4,
-            background:'none', border:'none', cursor:'pointer', padding:'6px 4px 8px',
-          }}>
-            {t.icon(active)}
-            <span style={{ fontSize:10, fontWeight:active?600:400, color:active?accent:'rgba(238,238,248,0.35)', letterSpacing:'0.01em' }}>{t.label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
+// ─── helper format secondi → "h:mm:ss" o "m:ss" ───
+function _fmtSec(sec) {
+  if (!isFinite(sec) || sec <= 0) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.round(sec % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+function _fmtPace(secPerKm) {
+  if (!isFinite(secPerKm) || secPerKm <= 0) return '—';
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${String(s).padStart(2,'0')}`;
 }
 
-// ─── Tweaks panel ─────────────────────────────────────────────────────────────
-function TweaksPanel({ tweaks, onChange }) {
-  return (
-    <div style={{
-      position:'fixed', bottom:'calc(env(safe-area-inset-bottom) + 72px)', right:14,
-      zIndex:200, background:'#141428', border:'1px solid rgba(255,255,255,0.12)',
-      borderRadius:18, padding:18, width:210,
-      boxShadow:'0 8px 40px rgba(0,0,0,0.7)',
-    }}>
-      <div style={{ color:'#EEEEF8', fontWeight:700, fontSize:14, marginBottom:16 }}>Tweaks</div>
-
-      <div style={{ color:'rgba(238,238,248,0.4)', fontSize:10, fontWeight:600, letterSpacing:'0.06em', marginBottom:8 }}>COLORE ACCENTO</div>
-      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-        {[['#FF4422','Arancio'],['#4D9EFF','Blu'],['#00CFA8','Verde'],['#A78BFA','Viola']].map(([col,lbl]) => (
-          <div key={col} title={lbl} onClick={() => onChange('accentColor', col)} style={{ width:30, height:30, borderRadius:15, background:col, cursor:'pointer', border:tweaks.accentColor===col?'3px solid white':'2px solid transparent', transition:'border 0.15s' }}/>
-        ))}
-      </div>
-
-      <div style={{ color:'rgba(238,238,248,0.4)', fontSize:10, fontWeight:600, letterSpacing:'0.06em', marginBottom:8 }}>RECUPERO</div>
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16 }}>
-        <input type="range" min={20} max={100} step={1} value={tweaks.recoveryScore}
-          onChange={e => onChange('recoveryScore', +e.target.value)}
-          style={{ flex:1, accentColor:tweaks.accentColor }}/>
-        <span style={{ color:'#EEEEF8', fontSize:13, fontWeight:700, width:28, textAlign:'right' }}>{tweaks.recoveryScore}</span>
-      </div>
-
-      <div style={{ color:'rgba(238,238,248,0.4)', fontSize:10, fontWeight:600, letterSpacing:'0.06em', marginBottom:8 }}>NOME</div>
-      <input value={tweaks.userName} onChange={e => onChange('userName', e.target.value)}
-        style={{ width:'100%', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', borderRadius:10, padding:'8px 12px', color:'#EEEEF8', fontSize:13, outline:'none', marginBottom:16 }}/>
-
-      <div onClick={() => onChange('garminConnected', !tweaks.garminConnected)} style={{
-        display:'flex', alignItems:'center', gap:8, cursor:'pointer',
-        background:tweaks.garminConnected?'rgba(77,158,255,0.15)':'rgba(255,255,255,0.05)',
-        border:`1px solid ${tweaks.garminConnected?'rgba(77,158,255,0.35)':'rgba(255,255,255,0.1)'}`,
-        borderRadius:10, padding:'9px 12px',
-      }}>
-        <div style={{ width:8, height:8, borderRadius:4, background:tweaks.garminConnected?'#4D9EFF':'rgba(238,238,248,0.3)' }}/>
-        <span style={{ color:tweaks.garminConnected?'#4D9EFF':'rgba(238,238,248,0.4)', fontSize:13, fontWeight:500 }}>
-          {tweaks.garminConnected ? 'Garmin Connesso' : 'Garmin Disconnesso'}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// ─── App ──────────────────────────────────────────────────────────────────────
-function App() {
-  const saved = (() => { try { return JSON.parse(localStorage.getItem('rca_mobile') || '{}'); } catch { return {}; } })();
-  const [screen, setScreen]           = useState(saved.screen || 'home');
-  const [workoutData, setWorkoutData] = useState(null);
-  const [tweaks, setTweaks]           = useState({ ...TWEAK_DEFAULTS, ...(saved.tweaks || {}) });
-  const [tweaksVisible, setTweaksVisible] = useState(false);
-
-  // Strava auth state
-  const [authState, setAuthState] = useState('checking'); // checking | login | setup | callback | authenticated
-  const [stravaAuth, setStravaAuth] = useState(null);
-  const [oauthCode, setOauthCode]   = useState(null);
-
-  useEffect(() => {
-    localStorage.setItem('rca_mobile', JSON.stringify({ screen, tweaks }));
-  }, [screen, tweaks]);
-
-  useEffect(() => {
-    // Hide splash
-    setTimeout(() => {
-      const s = document.getElementById('splash');
-      if (s) s.classList.add('hidden');
-    }, 700);
-
-    // Tweaks protocol
-    const handler = (e) => {
-      if (e.data?.type === '__activate_edit_mode')   setTweaksVisible(true);
-      if (e.data?.type === '__deactivate_edit_mode') setTweaksVisible(false);
-    };
-    window.addEventListener('message', handler);
-    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
-
-    // Check OAuth callback code in URL
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    if (code) {
-      setOauthCode(code);
-      setAuthState('callback');
-      return () => window.removeEventListener('message', handler);
-    }
-
-    // Check stored auth
-    getValidAuth().then(auth => {
-      if (auth) { setStravaAuth(auth); setAuthState('authenticated'); }
-      else       { setAuthState('login'); }
-    });
-
-    return () => window.removeEventListener('message', handler);
-  }, []);
-
-  const handleTweakChange = (key, val) => {
-    setTweaks(p => ({ ...p, [key]: val }));
-    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [key]: val } }, '*');
-  };
-
-  const handleAuthDone = (auth) => {
-    setStravaAuth(auth);
-    setAuthState('authenticated');
-  };
-
-  const handleLogout = () => {
-    StravaAuth.clear();
-    setStravaAuth(null);
-    setAuthState('login');
-  };
-
-  const navTo = (target, data) => {
-    if (target === 'workout' && data) setWorkoutData(data);
-    setScreen(target);
-  };
-
-  // Auth screens (no bottom nav)
-  if (authState === 'checking') {
+// ─── RacePredictionCard: predizione tempo gara con confronto target ──────────
+// prediction = { predicted, optimistic, conservative, vdot, sources, tsbFactor }
+function RacePredictionCard({ prediction, target, raceName, distanceKm = 21.097 }) {
+  if (!prediction || !isFinite(prediction.predicted)) {
     return (
-      <div style={{ height:'100%', background:'#06060E', display:'flex', alignItems:'center', justifyContent:'center' }}>
-        <div style={{ width:40, height:40, borderRadius:20, border:'3px solid #FC4C02', borderTopColor:'transparent', animation:'spin 0.8s linear infinite' }}/>
-        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      </div>
+      <GlowCard glow={NEON.purple} intensity={0.1}>
+        <div style={{ display:'flex', alignItems:'center', gap: 12 }}>
+          <div style={{ fontSize: 22, opacity: 0.6 }}>🎯</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: NEON.text, fontSize: 13, fontWeight: 700 }}>Predizione non disponibile</div>
+            <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 3, lineHeight: 1.4 }}>
+              Servono almeno una corsa su 5K, 10K o 21K per stimare il tempo gara.
+            </div>
+          </div>
+        </div>
+      </GlowCard>
     );
   }
 
-  if (authState === 'login') {
-    return (
-      <div style={{ height:'100%', background:'#06060E', display:'flex', flexDirection:'column' }}>
-        <StravaLoginScreen onSetup={() => setAuthState('setup')} />
-      </div>
-    );
-  }
+  const targetSec = useMemoCC(() => {
+    if (!target) return null;
+    const parts = target.split(':').map(Number);
+    if (parts.length === 3) return parts[0]*3600 + parts[1]*60 + parts[2];
+    if (parts.length === 2) return parts[0]*60 + parts[1];
+    return null;
+  }, [target]);
 
-  if (authState === 'setup') {
-    return (
-      <div style={{ height:'100%', background:'#06060E', display:'flex', flexDirection:'column' }}>
-        <StravaSetupScreen onDone={handleAuthDone} onBack={() => setAuthState('login')} />
-      </div>
-    );
-  }
+  const predicted = prediction.predicted;
+  const predictedTime = _fmtSec(predicted);
+  const predictedPace = _fmtPace(predicted / distanceKm);
 
-  if (authState === 'callback') {
-    return (
-      <div style={{ height:'100%', background:'#06060E', display:'flex', flexDirection:'column' }}>
-        <OAuthCallbackScreen code={oauthCode} onDone={handleAuthDone} onError={() => setAuthState('login')} />
-      </div>
-    );
-  }
+  const diff = isFinite(targetSec) ? predicted - targetSec : 0;
+  const ahead = diff < 0;
+  const diffMin = Math.abs(Math.floor(Math.abs(diff) / 60));
+  const diffSec = Math.abs(Math.round(Math.abs(diff) % 60));
+  const diffColor = ahead ? NEON.teal : NEON.orange;
 
-  // Main authenticated app
-  const renderScreen = () => {
-    switch (screen) {
-      case 'home':     return <HomeV2 auth={stravaAuth} onNav={navTo} tweaks={tweaks} onLogout={handleLogout} />;
-      case 'workouts': return <WorkoutPickerScreen tweaks={tweaks} auth={stravaAuth} onBack={() => setScreen('home')} onSelectWorkout={(w) => { setWorkoutData(w); setScreen('workout'); }} />;
-      case 'plan':     return <PlanSelectorScreen tweaks={tweaks} onBack={() => setScreen('home')} onSelectPlan={(plan) => { handleTweakChange('selectedPlan', plan.id); setScreen('home'); }} />;
-      case 'plan-old': return <PlanScreenM     onNav={navTo} tweaks={tweaks} />;
-      case 'workout':  return <WorkoutDetailScreen workout={workoutData} tweaks={tweaks} onBack={() => setScreen('workouts')} onStart={(w) => { setWorkoutData(w); setScreen('garmin'); }} />;
-      case 'coach':    return <CoachScreenM    tweaks={tweaks} onNav={navTo} auth={stravaAuth} />;
-      case 'progress': return <ProgressV2     tweaks={tweaks} />;
-      case 'recovery': return <RecoveryScreenM tweaks={tweaks} />;
-      case 'garmin':   return <GarminBuilderScreen onBack={() => setScreen('home')} tweaks={tweaks} workout={workoutData} />;
-      case 'race-settings': return <RaceSettingsScreenM tweaks={tweaks} onChange={handleTweakChange} onBack={() => setScreen('coach')} />;
-      default:         return <HomeV2 auth={stravaAuth} onNav={navTo} tweaks={tweaks} onLogout={handleLogout} />;
-    }
-  };
-
-  const showNav = !['workout','garmin','race-settings'].includes(screen);
-  const accentGlow = authState === 'authenticated' ? '#FC4C02' : tweaks.accentColor;
+  const sourceLabel = prediction.sources?.length
+    ? prediction.sources.map(s => s === '21k' ? '21K' : s === '10k' ? '10K' : '5K').join(' + ')
+    : '—';
 
   return (
-    <div style={{ height:'100%', display:'flex', flexDirection:'column', background:'#06060E', position:'relative' }}>
-      <div style={{ position:'fixed', inset:0, pointerEvents:'none', zIndex:0, overflow:'hidden' }}>
-        <div style={{ position:'absolute', top:'-15%', left:'-10%', width:'60%', height:'55%', background:`radial-gradient(circle, ${accentGlow}12 0%, transparent 70%)`, filter:'blur(50px)' }}/>
-        <div style={{ position:'absolute', bottom:'-20%', right:'-5%', width:'55%', height:'55%', background:'radial-gradient(circle, rgba(167,139,250,0.08) 0%, transparent 70%)', filter:'blur(50px)' }}/>
+    <GlowCard glow={NEON.purple} intensity={0.18}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 14 }}>
+        <div>
+          <div style={{ color: NEON.textFaint, fontSize: 10, fontWeight: 700, letterSpacing: '0.12em' }}>STIMA TEMPO</div>
+          <div style={{ color: NEON.text, fontSize: 13, fontWeight: 600, marginTop: 2 }}>{raceName || 'Mezza maratona'}</div>
+        </div>
+        {prediction.vdot && (
+          <div style={{
+            background: 'rgba(167,139,250,0.15)',
+            border: '1px solid rgba(167,139,250,0.35)',
+            color: NEON.purple,
+            fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
+            padding: '4px 8px', borderRadius: 6,
+          }}>VDOT {prediction.vdot}</div>
+        )}
       </div>
 
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', zIndex:1 }}>
-        {renderScreen()}
+      {/* Big predicted time */}
+      <div style={{ textAlign:'center', padding: '8px 0 12px' }}>
+        <div style={{
+          color: NEON.purple,
+          fontSize: 56,
+          fontWeight: 900,
+          letterSpacing: '-0.03em',
+          lineHeight: 1,
+          fontVariantNumeric: 'tabular-nums',
+          textShadow: `0 0 20px ${NEON.purple}66`,
+        }}>{predictedTime}</div>
+        <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 6 }}>
+          predizione · passo {predictedPace}/km
+        </div>
+        {(prediction.optimistic && prediction.conservative) && (
+          <div style={{ color: NEON.textFaint, fontSize: 10, marginTop: 4 }}>
+            range: {_fmtSec(prediction.optimistic)} – {_fmtSec(prediction.conservative)}
+          </div>
+        )}
       </div>
 
-      {showNav && (
-        <div style={{ position:'relative', zIndex:2 }}>
-          <MobileBottomNav current={screen} onChange={(t) => { setWorkoutData(null); setScreen(t); }} />
+      {/* Target comparison */}
+      {isFinite(targetSec) && targetSec > 0 && (
+        <div style={{
+          marginTop: 4,
+          padding: '12px 14px',
+          background: `${diffColor}10`,
+          borderLeft: `3px solid ${diffColor}`,
+          borderRadius: 8,
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+        }}>
+          <div>
+            <div style={{ color: NEON.textDim, fontSize: 10, fontWeight: 600, letterSpacing: '0.05em' }}>vs TARGET {target}</div>
+            <div style={{ color: diffColor, fontSize: 16, fontWeight: 800, letterSpacing: '-0.01em', marginTop: 2 }}>
+              {ahead ? 'In anticipo di' : 'In ritardo di'} {diffMin}:{String(diffSec).padStart(2,'0')}
+            </div>
+          </div>
+          <div style={{ fontSize: 24 }}>{ahead ? '🎯' : '💪'}</div>
         </div>
       )}
 
-      {tweaksVisible && <TweaksPanel tweaks={tweaks} onChange={handleTweakChange} />}
-    </div>
+      <div style={{ color: NEON.textFaint, fontSize: 10, marginTop: 10, textAlign:'center' }}>
+        Calcolato da PB su {sourceLabel} · {prediction.confidence ? `confidenza ${prediction.confidence}` : ''} · correzione forma TSB
+      </div>
+    </GlowCard>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
-
-<script>
-// PWA install prompt (Android Chrome) — iOS shows native "Add to Home Screen"
-let deferredPrompt;
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  document.getElementById('install-banner').classList.add('show');
-});
-document.getElementById('install-btn').addEventListener('click', () => {
-  if (deferredPrompt) {
-    deferredPrompt.prompt();
-    deferredPrompt.userChoice.then(() => {
-      document.getElementById('install-banner').classList.remove('show');
-    });
-  }
-});
-document.getElementById('dismiss-btn').addEventListener('click', () => {
-  document.getElementById('install-banner').classList.remove('show');
-});
-
-// Service Worker for offline support
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').then(reg => {
-    // Forza il check di un nuovo SW ad ogni apertura
-    reg.update().catch(() => {});
-    reg.addEventListener('updatefound', () => {
-      const nw = reg.installing;
-      if (!nw) return;
-      nw.addEventListener('statechange', () => {
-        if (nw.state === 'activated') {
-          // Ricarica una volta sola per prendere il nuovo codice
-          if (!sessionStorage.getItem('__sw_reloaded')) {
-            sessionStorage.setItem('__sw_reloaded', '1');
-            location.reload();
-          }
-        }
-      });
-    });
-  }).catch(() => {});
-  // Reload automatico quando un nuovo SW prende il controllo
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (refreshing) return;
-    refreshing = true;
-    if (!sessionStorage.getItem('__sw_reloaded')) {
-      sessionStorage.setItem('__sw_reloaded', '1');
-      location.reload();
-    }
-  });
-}
-</script>
-</body>
-</html>
+Object.assign(window, { RacePredictionCard });
