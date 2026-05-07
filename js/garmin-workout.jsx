@@ -153,35 +153,59 @@ function clearGarminBackend() {
 }
 
 function workoutToBackendJSON(workout, scheduleDate) {
-  const stepTypeMap = { warmup:'warmup', cooldown:'cooldown', interval:'interval', recovery:'recovery', rest:'rest' };
-  const cfg = getGarminBackend();
-  return {
-    email: cfg.email,
-    name: workout.name,
-    notes: workout.notes || '',
-    sport: 'running',
-    schedule_date: scheduleDate || null,
-    steps: workout.steps.map(s => {
-      const out = {
-        name: s.name,
-        type: stepTypeMap[s.type] || 'other',
-        durationType: s.durationType,
-        durationValue: s.durationValue,
-        targetType: s.targetType || 'none',
-      };
-      if (s.targetType === 'pace' && s.paceRange) {
-        // "5:30–6:00 /km" → min/max in min/km decimali
-        const m = s.paceRange.match(/(\d+):(\d+)\s*[–-]\s*(\d+):(\d+)/);
-        if (m) {
-          out.paceMinPerKm = +m[1] + (+m[2])/60;  // veloce
-          out.paceMaxPerKm = +m[3] + (+m[4])/60;  // lento
-        }
-      } else if (s.targetType === 'hr' && Array.isArray(s.hrRange)) {
-        out.hrMin = s.hrRange[0];
-        out.hrMax = s.hrRange[1];
+  // Formato accettato dal backend FastAPI: { name, description, sport_type, steps[], schedule_date }
+  // step: { type, duration:'TIME:sec'|'DISTANCE:m'|'OPEN', target_type:'pace'|'hr'|'open', target_low, target_high, note }
+  const stepTypeMap = { warmup:'warmup', cooldown:'cooldown', interval:'interval', recovery:'recovery', rest:'rest', easy:'run', long:'run', tempo:'run', run:'run' };
+  const PACE_MIN = 1.5, PACE_MAX = 12;  // limiti m/s ragionevoli per un runner (3:30/km → 7:30/km)
+
+  const steps = (workout.steps || []).map(s => {
+    // duration: durata in secondi → 'TIME:sec' ; distanza in m → 'DISTANCE:m'
+    let duration = 'OPEN';
+    if (s.durationType === 'time' || s.durationType === 'TIME') {
+      const sec = Number(s.durationValue) || 0;
+      duration = sec > 0 ? `TIME:${sec}` : 'OPEN';
+    } else if (s.durationType === 'distance' || s.durationType === 'DISTANCE') {
+      const m = Number(s.durationValue) || 0;
+      duration = m > 0 ? `DISTANCE:${m}` : 'OPEN';
+    } else if (s.durationType === 'lap' || s.durationType === 'LAP_BUTTON') {
+      duration = 'LAP_BUTTON';
+    }
+
+    let target_type = 'open', target_low = null, target_high = null;
+    if (s.targetType === 'pace' && s.paceRange) {
+      // "5:30–6:00 /km" → m/s. Garmin vuole low ≤ high in m/s; il min/km basso (veloce) = m/s alto.
+      const m = s.paceRange.match(/(\d+):(\d+)\s*[–-]\s*(\d+):(\d+)/);
+      if (m) {
+        const fastPace = +m[1] + (+m[2])/60;  // min/km veloce
+        const slowPace = +m[3] + (+m[4])/60;  // min/km lento
+        const fastMs   = 1000 / (fastPace * 60); // m/s alto
+        const slowMs   = 1000 / (slowPace * 60); // m/s basso
+        target_type = 'pace';
+        target_low  = +Math.max(PACE_MIN, Math.min(slowMs, fastMs)).toFixed(3);
+        target_high = +Math.min(PACE_MAX, Math.max(slowMs, fastMs)).toFixed(3);
       }
-      return out;
-    }),
+    } else if (s.targetType === 'hr' && Array.isArray(s.hrRange)) {
+      target_type = 'hr';
+      target_low  = Number(s.hrRange[0]) || null;
+      target_high = Number(s.hrRange[1]) || null;
+    }
+
+    return {
+      type: stepTypeMap[s.type] || 'run',
+      duration,
+      target_type,
+      target_low,
+      target_high,
+      note: s.name || '',
+    };
+  });
+
+  return {
+    name:          workout.name || 'Workout',
+    description:   workout.notes || '',
+    sport_type:    'running',
+    schedule_date: scheduleDate || null,
+    steps,
   };
 }
 
@@ -192,9 +216,8 @@ async function pushToGarminConnect(workout, scheduleDate) {
     err.code = 'NO_BACKEND';
     throw err;
   }
-  // Server aspetta { tcx, schedule_date } — non JSON strutturato
-  const tcxXml = generateTCX(workout);
-  const body = { tcx: tcxXml, schedule_date: scheduleDate || null };
+  // Server aspetta JSON strutturato (steps[]); il TCX legacy non funziona con upload_workout
+  const body = workoutToBackendJSON(workout, scheduleDate);
   const res = await fetch(`${cfg.url}/upload-workout`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

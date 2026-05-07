@@ -117,9 +117,22 @@ class LoginReq(BaseModel):
     mfa:      Optional[str] = None
 
 
+class WorkoutStep(BaseModel):
+    type:        str             # warmup | interval | recovery | cooldown | run | rest
+    duration:    Optional[str] = None   # 'TIME:600' (sec) | 'DISTANCE:1000' (m) | 'OPEN' | 'LAP_BUTTON'
+    target_type: Optional[str] = None   # 'pace' | 'hr' | 'open'
+    target_low:  Optional[float] = None # m/s per pace, bpm per hr
+    target_high: Optional[float] = None
+    note:        Optional[str] = None
+
+
 class UploadReq(BaseModel):
-    tcx:           str               # contenuto XML TCX o base64
-    schedule_date: Optional[str] = None  # YYYY-MM-DD; se assente, oggi
+    name:          Optional[str] = None
+    description:   Optional[str] = None
+    sport_type:    Optional[str] = 'running'
+    steps:         Optional[list[WorkoutStep]] = None  # nuovo formato JSON
+    tcx:           Optional[str] = None                 # legacy, ignorato
+    schedule_date: Optional[str] = None
 
 
 # ────────────── Endpoints ──────────────
@@ -171,33 +184,112 @@ def logout(_=Depends(require_auth)):
     return {"ok": True}
 
 
+# ─── Helpers JSON Garmin ──────────────────────────────────────────────────
+STEP_TYPE_MAP = {
+    'warmup':   {'stepTypeId': 1, 'stepTypeKey': 'warmup'},
+    'cooldown': {'stepTypeId': 2, 'stepTypeKey': 'cooldown'},
+    'interval': {'stepTypeId': 3, 'stepTypeKey': 'interval'},
+    'recovery': {'stepTypeId': 4, 'stepTypeKey': 'recovery'},
+    'rest':     {'stepTypeId': 5, 'stepTypeKey': 'rest'},
+    'run':      {'stepTypeId': 6, 'stepTypeKey': 'other'},
+    'other':    {'stepTypeId': 6, 'stepTypeKey': 'other'},
+}
+
+DURATION_TYPE_MAP = {
+    'TIME':     {'conditionTypeId': 2, 'conditionTypeKey': 'time'},
+    'DISTANCE': {'conditionTypeId': 3, 'conditionTypeKey': 'distance'},
+    'OPEN':     {'conditionTypeId': 1, 'conditionTypeKey': 'lap.button'},
+    'LAP_BUTTON': {'conditionTypeId': 1, 'conditionTypeKey': 'lap.button'},
+}
+
+TARGET_TYPE_MAP = {
+    'open': {'workoutTargetTypeId': 1, 'workoutTargetTypeKey': 'no.target'},
+    'pace': {'workoutTargetTypeId': 6, 'workoutTargetTypeKey': 'pace.zone'},
+    'hr':   {'workoutTargetTypeId': 4, 'workoutTargetTypeKey': 'heart.rate.zone'},
+}
+
+
+def _build_step(idx: int, s: dict) -> dict:
+    stype = STEP_TYPE_MAP.get(s.get('type', 'run'), STEP_TYPE_MAP['run'])
+
+    # Duration: "TIME:600" → time/600s, "DISTANCE:1000" → distance/1000m, "OPEN"/"LAP_BUTTON"
+    dur     = (s.get('duration') or 'OPEN').upper()
+    dur_val = None
+    if ':' in dur:
+        kind, val = dur.split(':', 1)
+        try: dur_val = float(val)
+        except ValueError: dur_val = None
+        dur = kind
+    dtype = DURATION_TYPE_MAP.get(dur, DURATION_TYPE_MAP['OPEN'])
+
+    # Target
+    ttype_key = (s.get('target_type') or 'open').lower()
+    ttype     = TARGET_TYPE_MAP.get(ttype_key, TARGET_TYPE_MAP['open'])
+
+    step = {
+        'type':                'ExecutableStepDTO',
+        'stepOrder':           idx,
+        'stepType':            stype,
+        'childStepId':         None,
+        'description':         s.get('note') or '',
+        'endCondition':        dtype,
+        'endConditionValue':   dur_val,
+        'preferredEndConditionUnit': None,
+        'endConditionCompare': None,
+        'targetType':          ttype,
+        'targetValueOne':      s.get('target_low'),
+        'targetValueTwo':      s.get('target_high'),
+        'targetValueUnit':     None,
+        'zoneNumber':          None,
+    }
+    return step
+
+
+def _build_workout_json(req: UploadReq) -> dict:
+    name  = req.name or f"Workout {date.today().isoformat()}"
+    steps = req.steps or []
+    workout_steps = [_build_step(i + 1, s.dict()) for i, s in enumerate(steps)]
+
+    return {
+        'sportType': {
+            'sportTypeId':  1,
+            'sportTypeKey': 'running',
+        },
+        'workoutName':         name,
+        'description':         req.description or '',
+        'workoutSegments': [{
+            'segmentOrder':   1,
+            'sportType': {
+                'sportTypeId':  1,
+                'sportTypeKey': 'running',
+            },
+            'workoutSteps':   workout_steps,
+        }],
+    }
+
+
 @app.post("/upload-workout")
 def upload_workout(req: UploadReq, _=Depends(require_auth)):
-    """Carica un workout TCX e opzionalmente lo schedula a una data."""
+    """Crea un workout strutturato su Garmin Connect e opzionalmente lo schedula."""
     global _client
     if not _client:
         raise HTTPException(401, detail={"code": "NOT_LOGGED_IN", "message": "Login required"})
 
-    # Decoded TCX content
-    tcx_content = req.tcx
-    if not tcx_content.strip().startswith("<"):
-        # probabilmente base64
-        try:
-            tcx_content = base64.b64decode(tcx_content).decode("utf-8")
-        except Exception:
-            pass
+    if not req.steps:
+        raise HTTPException(400, detail={"code": "BAD_REQUEST", "message": "steps[] è obbligatorio"})
 
     try:
-        # Upload workout struttura
-        # python-garminconnect non ha upload diretto di workout TCX strutturati,
-        # ma possiamo usare l'API workout creation tramite garth.
-        result = _client.upload_workout(io.BytesIO(tcx_content.encode("utf-8")))
+        payload = _build_workout_json(req)
+        print(f"[INFO] Creating Garmin workout: {payload['workoutName']} with {len(payload['workoutSegments'][0]['workoutSteps'])} steps", flush=True)
+        result = _client.upload_workout(payload)
 
         workout_id = None
         if isinstance(result, dict):
             workout_id = result.get("workoutId") or result.get("id")
         elif hasattr(result, "workoutId"):
             workout_id = result.workoutId
+        elif isinstance(result, (int, str)):
+            workout_id = result
 
         scheduled = False
         sched_date = None
