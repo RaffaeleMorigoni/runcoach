@@ -22,13 +22,20 @@ function ProgressV2({ tweaks }) {
   const last         = loadHistory[loadHistory.length - 1] || { ctl: 0, atl: 0, tsb: 0 };
   const overTr       = useMemoP2(() => detectOvertraining(loadHistory, trainingData.slice(-10)), [loadHistory, trainingData]);
 
-  // PB calcolati dalle attività (best effort) → fallback ai PB hardcoded
-  const computedPBs = useMemoP2(() => computePBsFromActivities(activities, PB), [activities]);
-  const pbs = useMemoP2(() => ({
-    '5k':  { distanceMeters: 5000,  timeSec: computedPBs?.['5k']?.seconds  || PB['5k'].seconds,  daysAgo: 30 },
-    '10k': { distanceMeters: 10000, timeSec: computedPBs?.['10k']?.seconds || PB['10k'].seconds, daysAgo: 30 },
-    '21k': { distanceMeters: 21097, timeSec: computedPBs?.['21k']?.seconds || PB['21k'].seconds, daysAgo: 90 },
-  }), [computedPBs]);
+  // PB calcolati dalle attività reali (best effort). NIENTE fallback hardcoded:
+  // se Strava non ha quel PB, lo escludiamo dal calcolo (così la stima si basa SOLO su dati veri).
+  const computedPBs = useMemoP2(() => computePBsFromActivities(activities, null), [activities]);
+  const pbs = useMemoP2(() => {
+    const out = {};
+    const meters = { '5k': 5000, '10k': 10000, '21k': 21097 };
+    for (const k of Object.keys(meters)) {
+      const pb = computedPBs?.[k];
+      if (pb && pb.seconds && pb.fromStrava) {
+        out[k] = { distanceMeters: meters[k], timeSec: pb.seconds, daysAgo: pb.daysAgo || 30 };
+      }
+    }
+    return out;
+  }, [computedPBs]);
   const prediction = useMemoP2(() => predictRaceTime(pbs, last.tsb, 21.097), [pbs, last.tsb]);
 
   // Statistiche aggregate
@@ -125,10 +132,20 @@ function ProgressV2({ tweaks }) {
       </div>
 
       {/* Predizione gara */}
-      {prediction && (
+      {prediction ? (
         <div style={{ padding: '0 14px 14px' }}>
           <SectionHeader kicker="VDOT" title="Stima tempo gara" color={NEON.purple}/>
           <RacePredictionCard prediction={prediction} target={USER.raceTargetTime} raceName={USER.raceName}/>
+        </div>
+      ) : (
+        <div style={{ padding: '0 14px 14px' }}>
+          <SectionHeader kicker="VDOT" title="Stima tempo gara" color={NEON.purple}/>
+          <GlowCard glow={NEON.purple} intensity={0.08}>
+            <div style={{ color: NEON.text, fontSize: 13, fontWeight: 700 }}>Servono PB reali</div>
+            <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
+              Per stimare il tempo gara servono almeno una corsa registrata su 5K, 10K o 21K. Sincronizza più attività da Strava o lancia una corsa di test.
+            </div>
+          </GlowCard>
         </div>
       )}
 

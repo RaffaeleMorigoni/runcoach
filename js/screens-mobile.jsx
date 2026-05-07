@@ -2,24 +2,42 @@
 const { useState, useEffect, useRef } = React;
 
 // ─── Plan ─────────────────────────────────────────────────────────────────────
-function PlanScreenM({ onNav, tweaks }) {
+function PlanScreenM({ onNav, tweaks, activities }) {
   const accent = tweaks.accentColor || C.orange;
-  const [selectedDay, setSelectedDay] = useState(1);
-  const currentPhase = 'Scarico (Taper)';
+  const currentPhase = USER.daysToRace <= 14 ? 'Scarico (Taper)'
+                     : USER.daysToRace <= 35 ? 'Prep. Gara'
+                     : USER.daysToRace <= 56 ? 'Lavoro a Soglia'
+                     : USER.daysToRace <= 84 ? 'Sviluppo Aerobico'
+                     : 'Costruzione Base';
   const phases = ['Costruzione Base','Sviluppo Aerobico','Lavoro a Soglia','Prep. Gara','Scarico (Taper)'];
 
-  const FULL_WEEK = [
-    { ...WEEK_SCHEDULE[0], workout: null },
-    { ...WEEK_SCHEDULE[1], workout: TODAY_WORKOUT },
-    { ...WEEK_SCHEDULE[2], workout: null },
-    { ...WEEK_SCHEDULE[3], workout: { type:'easy', title:'Attivazione pre-gara', distance:5, duration:30, targetPace:'6:10–6:40 /km', hrZone:'Zona 1–2', subtitle:'Gambe sveglie, ritmo leggero — nessuno sforzo' } },
-    { ...WEEK_SCHEDULE[4], workout: null },
-    { ...WEEK_SCHEDULE[5], workout: { type:'long', title:'Ultimo Lungo 14km', distance:14, duration:85, targetPace:'6:00–6:30 /km', hrZone:'Zona 2', subtitle:'Ultimo lungo di taper — goditi il ritmo, niente eroismo' } },
-    { ...WEEK_SCHEDULE[6], workout: { type:'recovery', title:'Recupero 4km', distance:4, duration:26, targetPace:'7:00+ /km', hrZone:'Zona 1', subtitle:'Scarico totale dopo il lungo' } },
-  ];
+  // Genera piano dinamico: 7 giorni a partire da oggi, ognuno con un workout
+  const FULL_WEEK = React.useMemo(() => {
+    const trainingData = activities ? activitiesToTrainingData(activities) : [];
+    const loadHistory = calculateTrainingLoad(trainingData);
+    const raceDate = USER.raceDateISO || USER.raceDate;
+    const week = generateWeekPlan(loadHistory, raceDate);
+    // Mappa lo status (done se isPast e c'è attività; today se isToday; planned altrimenti)
+    return week.map((d, i) => {
+      const date = new Date(d.date);
+      const matchAct = (activities || []).find(a => {
+        const ad = new Date(a.start_date);
+        return ad.toDateString() === date.toDateString();
+      });
+      return {
+        ...d,
+        type: d.workout?.type || 'rest',
+        dist: d.workout?.distance || 0,
+        status: d.isToday ? 'today' : (matchAct ? 'done' : 'planned'),
+        actualKm: matchAct ? +(matchAct.distance / 1000).toFixed(1) : null,
+      };
+    });
+  }, [activities]);
 
-  const sel = FULL_WEEK[selectedDay];
-  const w = sel.workout;
+  // Default: oggi (indice 0)
+  const [selectedDay, setSelectedDay] = useState(0);
+  const sel = FULL_WEEK[selectedDay] || FULL_WEEK[0];
+  const w = sel?.workout;
 
   return (
     <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
@@ -41,11 +59,11 @@ function PlanScreenM({ onNav, tweaks }) {
         <div style={{ display:'flex', gap:6 }}>
           {FULL_WEEK.map((d,i)=>{
             const active   = i===selectedDay;
-            const m        = TYPE_META[d.type];
+            const m        = TYPE_META[d.type] || TYPE_META.rest;
             const isDone   = d.status==='done';
             const isToday  = d.status==='today';
             const isRest   = d.type==='rest';
-            const dayShort = ['Lun','Mar','Mer','Gio','Ven','Sab','Dom'][i];
+            const dayShort = (d.dayLabel || '').slice(0,3).replace(/^./, c => c.toUpperCase());
 
             // Colore dot: tipo-specifico, oppure grigio per riposo
             const dotColor = isRest ? 'rgba(255,255,255,0.25)' : m.color;
@@ -86,7 +104,14 @@ function PlanScreenM({ onNav, tweaks }) {
 
                   {/* Contenuto centrale */}
                   {isDone ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7" stroke={C.teal} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    <>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L19 7" stroke={C.teal} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      {d.actualKm > 0 && (
+                        <div style={{ color:C.teal, fontSize:10, fontWeight:700, lineHeight:1 }}>
+                          {d.actualKm}<span style={{ fontSize:8, fontWeight:500, opacity:0.7 }}>km</span>
+                        </div>
+                      )}
+                    </>
                   ) : isRest ? (
                     <>
                       <div style={{ fontSize:16, lineHeight:1 }}>💤</div>
@@ -167,15 +192,29 @@ function PlanScreenM({ onNav, tweaks }) {
         <div style={{ color:C.text, fontSize:15, fontWeight:600, marginBottom:10 }}>Carico Settimanale</div>
         <Card style={{ cursor:'default' }}>
           <div style={{ padding:'16px' }}>
-            <div style={{ display:'flex', gap:0, marginBottom:14 }}>
-              {[{label:'Volume',val:'23 km',sub:'↓ Taper'},{label:'Corse',val:'5',sub:'+ 1 forza'},{label:'Lungo',val:'14 km',sub:'Ultimo taper'}].map((s,i)=>(
-                <div key={i} style={{ flex:1, borderRight:i<2?`1px solid ${C.border}`:'none', paddingRight:12, paddingLeft:i>0?12:0 }}>
-                  <div style={{ color:C.faint, fontSize:11, marginBottom:3 }}>{s.label}</div>
-                  <div style={{ color:C.text, fontSize:17, fontWeight:700 }}>{s.val}</div>
-                  <div style={{ color:accent, fontSize:11, marginTop:2 }}>{s.sub}</div>
+            {(() => {
+              const planned = FULL_WEEK.reduce((s,d)=> s + (d.workout?.distance || 0), 0);
+              const runDays = FULL_WEEK.filter(d => d.type !== 'rest').length;
+              const longest = Math.max(...FULL_WEEK.map(d => d.workout?.distance || 0));
+              const phaseHint = USER.daysToRace <= 14 ? '↓ Taper'
+                              : USER.daysToRace <= 35 ? '↑ Carico'
+                              : '→ Stabile';
+              return (
+                <div style={{ display:'flex', gap:0, marginBottom:14 }}>
+                  {[
+                    { label:'Volume', val:`${Math.round(planned)} km`, sub: phaseHint },
+                    { label:'Corse',  val: `${runDays}`, sub: `${7-runDays} riposo` },
+                    { label:'Lungo',  val: `${longest} km`, sub: USER.daysToRace <= 14 ? 'Taper lungo' : 'Settimanale' },
+                  ].map((s,i)=>(
+                    <div key={i} style={{ flex:1, borderRight:i<2?`1px solid ${C.border}`:'none', paddingRight:12, paddingLeft:i>0?12:0 }}>
+                      <div style={{ color:C.faint, fontSize:11, marginBottom:3 }}>{s.label}</div>
+                      <div style={{ color:C.text, fontSize:17, fontWeight:700 }}>{s.val}</div>
+                      <div style={{ color:accent, fontSize:11, marginTop:2 }}>{s.sub}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              );
+            })()}
             <div style={{ color:C.faint, fontSize:11, marginBottom:6 }}>Bilanciamento Carico</div>
             <div style={{ display:'flex', gap:3, height:8 }}>
               {[{w:45,c:C.teal},{w:30,c:accent},{w:15,c:C.purple},{w:10,c:'rgba(255,255,255,0.2)'}].map((b,i)=>(
@@ -378,35 +417,66 @@ function CoachScreenM({ tweaks, onNav, auth }) {
     }
   })();
 
-  // Contesto completo passato a Claude
-  const buildSystemContext = () => `Agisci come un Running Coach professionista specializzato nella preparazione della mezza maratona, con approccio scientifico, prudente, motivante e altamente personalizzato.
+  // Contesto completo passato all'AI — ispirato al prompt "coach running per amatori"
+  const buildSystemContext = () => `Agisci come un coach running per runner amatori.
 
-RUOLO
-Sei il coach di corsa personale di ${tweaks.userName || USER.name}. Devi:
-- spiegare ogni allenamento in modo chiaro e pratico
-- adattare il programma in base ai feedback reali
-- monitorare carico, recupero e segnali di affaticamento
-- privilegiare SEMPRE salute, continuità e prevenzione infortuni rispetto alla performance a tutti i costi
+STILE RISPOSTA
+- tono diretto, pratico, motivante ma non accondiscendente
+- niente teoria inutile
+- se qualcosa è rischioso, dillo chiaramente
+- usa emoji con moderazione
+- struttura sempre in sezioni chiare
+- dai piani concreti, non vaghi
+- quando scrivi allenamenti, usa formato Garmin copiabile
+- rispondi SEMPRE in italiano
 
-STILE
-- Tono professionale, concreto, incoraggiante
-- Linguaggio chiaro ma competente, da vero coach
-- Istruzioni precise, niente frasi vaghe
-- Motivante senza essere aggressivo o estremo
-- Diretto e corretto quando serve
-- Risposte CONCISE: max 4-6 frasi salvo richiesta esplicita di approfondimento
+REGOLE COACH (non negoziabili)
+1. Priorità: continuità e prevenzione infortuni.
+2. Non proporre carichi aggressivi se c'è dolore o fatica.
+3. Se il runner salta allenamenti, ricalibra senza "recuperare tutto".
+4. Se c'è dolore a freddo o localizzato, consiglia stop/recupero — niente qualità.
+5. Distingui sempre: allenamento chiave / easy / lungo / recupero.
+6. Per ogni allenamento indica: obiettivo / struttura Garmin / ritmo target / cosa sentire / errori da evitare.
+7. Per gare indica: pacing per blocchi / strategia gel / segnali decisionali km 5 / km 10 / km 15.
+8. Usa SEMPRE ritmi realistici basati sui dati reali, non sugli obiettivi desiderati. Se i ritmi recenti su Strava non sono compatibili col target, dillo.
+9. Se i dati sono incoerenti, segnalalo (es. PB dichiarato non coerente con ritmi attuali).
 
-PRINCIPI
-1. Sicurezza prima di tutto — se emergono segnali di dolore/stanchezza anomala/problemi, riduci carico e consiglia prudenza. In presenza di sintomi importanti, suggerisci di consultare medico/fisioterapista.
-2. Personalizzazione continua — usa sempre i dati personali qui sotto.
-3. Non inventare dati fisiologici precisi se non li hai.
-4. Non suggerire di aumentare volume/intensità durante il taper (siamo in taper!).
-5. Non trattare ogni seduta dura come obbligatoria.
+FORMATO ALLENAMENTO GARMIN (testo leggibile, sempre nello stesso ordine)
+- Nome allenamento
+- Riscaldamento
+- Blocco principale
+- Recuperi
+- Defaticamento
+- Target passo
+- Note pratiche
 
-FORMATO RISPOSTE
-Quando opportuno, usa sezioni brevi come:
-- "Analisi" / "Allenamento di oggi" / "Adattamento consigliato" / "Attenzione" / "Prossimo passo"
-Se l'utente manda dati di una corsa, analizza numeri + sensazioni, dì cosa è andato bene, evidenzia criticità, adatta il prossimo allenamento.
+ESEMPIO OUTPUT ATTESO
+
+# 🔴 MARTEDÌ — QUALITÀ CONTROLLATA
+
+🎯 Obiettivo:
+rendere familiare il ritmo gara senza accumulare fatica.
+
+📲 Garmin:
+1. Riscaldamento
+- 10:00 easy
+- passo libero
+
+2. Ripeti 3 volte:
+- Corsa: 2.00 km
+- Target passo: 5:30–5:35/km
+- Recupero: 2:00 jogging lento
+
+3. Defaticamento
+- 10:00 easy
+
+⚠️ Regole:
+- non andare sotto 5:25
+- se senti il polpaccio, interrompi
+- fatica massima 6/10
+
+🧠 Sensazione corretta:
+"sto lavorando ma controllo".
 
 ─── PROFILO ATLETA ─────────────────────────────
 Nome: ${tweaks.userName || USER.name}

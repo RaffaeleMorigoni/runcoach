@@ -627,9 +627,40 @@ const PLAN_OPTIONS = [
 
 function PlanSelectorScreen({ tweaks, onBack, onSelectPlan }) {
   const accent = tweaks.accentColor || C.orange;
+  const currentPlanId = tweaks.selectedPlan;
+  const [confirmingId, setConfirmingId] = React.useState(null);
+  const [toastVisible, setToastVisible] = React.useState(false);
+
+  const handleSelect = (plan) => {
+    setConfirmingId(plan.id);
+    setToastVisible(true);
+    // Salva subito
+    if (onSelectPlan) onSelectPlan(plan);
+    // Torna home dopo 1.2s
+    setTimeout(() => {
+      if (onBack) onBack();
+    }, 1200);
+  };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'auto', position:'relative' }}>
+      {/* Toast conferma */}
+      {toastVisible && (
+        <div style={{
+          position:'fixed', bottom: 90, left:'50%', transform:'translateX(-50%)',
+          background: C.teal, color:'#0a1410', padding:'12px 20px', borderRadius: 12,
+          fontSize: 14, fontWeight: 700, boxShadow:'0 8px 24px rgba(0,207,168,0.3)',
+          zIndex: 999, display:'flex', alignItems:'center', gap: 8,
+          animation: 'slideUpFade 0.3s ease',
+        }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0a1410" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12l5 5L19 7"/>
+          </svg>
+          Piano attivato
+        </div>
+      )}
+      <style>{`@keyframes slideUpFade{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}`}</style>
+
       <div style={{ padding: '16px 20px 8px', display: 'flex', alignItems: 'center', gap: 12 }}>
         {onBack && (
           <button onClick={onBack} style={{
@@ -643,34 +674,49 @@ function PlanSelectorScreen({ tweaks, onBack, onSelectPlan }) {
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: C.sub, fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-            Dopo Lucca
+            {currentPlanId ? 'Piano attivo · cambia' : 'Dopo Lucca'}
           </div>
           <div style={{ color: C.text, fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.15 }}>
-            Prossimo piano
+            {currentPlanId ? 'Cambia piano' : 'Prossimo piano'}
           </div>
           <div style={{ color: C.sub, fontSize: 13, marginTop: 4 }}>
-            Hai chiuso la mezza. Cosa vuoi fare adesso?
+            {currentPlanId ? 'Tocca un piano diverso per attivarlo.' : 'Hai chiuso la mezza. Cosa vuoi fare adesso?'}
           </div>
         </div>
       </div>
 
       <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {PLAN_OPTIONS.map(plan => (
+        {PLAN_OPTIONS.map(plan => {
+          const isCurrent = plan.id === currentPlanId;
+          const isSelectedNow = plan.id === confirmingId;
+          return (
           <button
             key={plan.id}
-            onClick={() => onSelectPlan && onSelectPlan(plan)}
+            onClick={() => handleSelect(plan)}
+            disabled={isSelectedNow}
             style={{
               background: plan.bg,
-              border: `1px solid ${plan.accent}33`,
+              border: `${isCurrent ? 2 : 1}px solid ${isCurrent ? plan.accent : `${plan.accent}33`}`,
               borderRadius: 18,
               padding: 18,
               textAlign: 'left',
-              cursor: 'pointer',
+              cursor: isSelectedNow ? 'default' : 'pointer',
               display: 'flex', flexDirection: 'column', gap: 12,
               width: '100%',
               boxSizing: 'border-box',
+              position:'relative',
+              transform: isSelectedNow ? 'scale(0.98)' : 'scale(1)',
+              transition: 'transform 0.2s, border-color 0.2s',
+              boxShadow: isCurrent ? `0 0 0 4px ${plan.accent}1a` : 'none',
             }}
           >
+            {isCurrent && (
+              <div style={{
+                position:'absolute', top: -10, right: 14,
+                background: plan.accent, color:'#fff', fontSize: 9, fontWeight: 800,
+                letterSpacing: '0.1em', padding:'3px 8px', borderRadius: 4,
+              }}>ATTIVO</div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ color: plan.accent, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>
@@ -700,7 +746,8 @@ function PlanSelectorScreen({ tweaks, onBack, onSelectPlan }) {
               </div>
             </div>
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

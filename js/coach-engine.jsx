@@ -738,12 +738,16 @@ function computePBsFromActivities(activities, fallback) {
       const pm = Math.floor(paceSec / 60);
       const ps = paceSec % 60;
       const date = bestActDate ? new Date(bestActDate).toLocaleDateString('it-IT', { day:'numeric', month:'short', year:'numeric' }) : '—';
+      const daysAgo = bestActDate
+        ? Math.max(1, Math.round((Date.now() - new Date(bestActDate).getTime()) / 86400000))
+        : 30;
       out[t.key] = {
         distance: t.distKm,
         time,
         seconds: bestSec,
         pace: `${pm}:${String(ps).padStart(2,'0')}/km`,
         date,
+        daysAgo,
         fromStrava: true,
       };
     }
