@@ -155,7 +155,10 @@ def login(req: LoginReq, _=Depends(require_auth)):
     except GarminConnectTooManyRequestsError as e:
         raise HTTPException(429, detail={"code": "RATE_LIMIT", "message": str(e)})
     except Exception as e:
-        raise HTTPException(500, detail={"code": "ERROR", "message": str(e)})
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[ERROR /login] {type(e).__name__}: {e}\n{tb}", flush=True)
+        raise HTTPException(500, detail={"code": "ERROR", "message": f"{type(e).__name__}: {e}"})
 
 
 @app.post("/logout")
@@ -222,7 +225,10 @@ def upload_workout(req: UploadReq, _=Depends(require_auth)):
         _client = None
         raise HTTPException(401, detail={"code": "AUTH", "message": "Sessione scaduta. Rifai login."})
     except Exception as e:
-        raise HTTPException(500, detail={"code": "UPLOAD_ERROR", "message": str(e)})
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[ERROR /upload-workout] {type(e).__name__}: {e}\n{tb}", flush=True)
+        raise HTTPException(500, detail={"code": "UPLOAD_ERROR", "message": f"{type(e).__name__}: {e}"})
 
 
 if __name__ == "__main__":
