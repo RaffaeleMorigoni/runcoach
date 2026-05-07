@@ -192,7 +192,9 @@ async function pushToGarminConnect(workout, scheduleDate) {
     err.code = 'NO_BACKEND';
     throw err;
   }
-  const body = workoutToBackendJSON(workout, scheduleDate);
+  // Server aspetta { tcx, schedule_date } — non JSON strutturato
+  const tcxXml = generateTCX(workout);
+  const body = { tcx: tcxXml, schedule_date: scheduleDate || null };
   const res = await fetch(`${cfg.url}/upload-workout`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -200,9 +202,14 @@ async function pushToGarminConnect(workout, scheduleDate) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(data.detail || `HTTP ${res.status}`);
+    const d = data.detail;
+    const msg = typeof d === 'string' ? d
+              : (d && d.message) ? d.message
+              : Array.isArray(d) ? d.map(x => x.msg || JSON.stringify(x)).join('; ')
+              : `HTTP ${res.status}`;
+    const err = new Error(msg);
     err.code = res.status === 401 ? 'AUTH' : 'FETCH';
-    err.detail = data.detail;
+    err.detail = msg;
     throw err;
   }
   return data;
