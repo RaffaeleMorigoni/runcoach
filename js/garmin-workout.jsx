@@ -127,16 +127,95 @@ function workoutToGarminJSON(workout) {
   };
 }
 
-async function pushToGarminConnect(workout) {
-  const body = workoutToGarminJSON(workout);
-  const res = await fetch('https://connect.garmin.com/workout-service/workout', {
+// ─── Backend RunCoach Garmin (FastAPI + python-garminconnect) ────────────────
+function getGarminBackend() {
+  return {
+    url:   localStorage.getItem('garmin_backend_url')   || '',
+    email: localStorage.getItem('garmin_backend_email') || '',
+  };
+}
+
+function saveGarminBackend(url, email) {
+  localStorage.setItem('garmin_backend_url',   (url||'').replace(/\/+$/,''));
+  localStorage.setItem('garmin_backend_email', email||'');
+}
+
+function clearGarminBackend() {
+  localStorage.removeItem('garmin_backend_url');
+  localStorage.removeItem('garmin_backend_email');
+}
+
+function workoutToBackendJSON(workout, scheduleDate) {
+  const stepTypeMap = { warmup:'warmup', cooldown:'cooldown', interval:'interval', recovery:'recovery', rest:'rest' };
+  const cfg = getGarminBackend();
+  return {
+    email: cfg.email,
+    name: workout.name,
+    notes: workout.notes || '',
+    sport: 'running',
+    schedule_date: scheduleDate || null,
+    steps: workout.steps.map(s => {
+      const out = {
+        name: s.name,
+        type: stepTypeMap[s.type] || 'other',
+        durationType: s.durationType,
+        durationValue: s.durationValue,
+        targetType: s.targetType || 'none',
+      };
+      if (s.targetType === 'pace' && s.paceRange) {
+        // "5:30–6:00 /km" → min/max in min/km decimali
+        const m = s.paceRange.match(/(\d+):(\d+)\s*[–-]\s*(\d+):(\d+)/);
+        if (m) {
+          out.paceMinPerKm = +m[1] + (+m[2])/60;  // veloce
+          out.paceMaxPerKm = +m[3] + (+m[4])/60;  // lento
+        }
+      } else if (s.targetType === 'hr' && Array.isArray(s.hrRange)) {
+        out.hrMin = s.hrRange[0];
+        out.hrMax = s.hrRange[1];
+      }
+      return out;
+    }),
+  };
+}
+
+async function pushToGarminConnect(workout, scheduleDate) {
+  const cfg = getGarminBackend();
+  if (!cfg.url || !cfg.email) {
+    const err = new Error('backend_not_configured');
+    err.code = 'NO_BACKEND';
+    throw err;
+  }
+  const body = workoutToBackendJSON(workout, scheduleDate);
+  const res = await fetch(`${cfg.url}/upload-workout`, {
     method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'NK': 'NT' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.detail || `HTTP ${res.status}`);
+    err.code = res.status === 401 ? 'AUTH' : 'FETCH';
+    err.detail = data.detail;
+    throw err;
+  }
+  return data;
+}
+
+async function loginGarminBackend(url, email, password, mfaCode) {
+  const u = (url||'').replace(/\/+$/,'');
+  const res = await fetch(`${u}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, mfa_code: mfaCode || null }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.detail || `HTTP ${res.status}`);
+    err.code = data.detail === 'mfa_required' ? 'MFA' : 'AUTH';
+    throw err;
+  }
+  saveGarminBackend(u, email);
+  return data;
 }
 
 function downloadTCX(workout) {
@@ -146,6 +225,88 @@ function downloadTCX(workout) {
   const a    = document.createElement('a');
   a.href     = url;
   a.download = `${workout.name.replace(/\s+/g,'-')}.tcx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── ICS Calendar Generator (per Apple/Google Calendar) ───────────────────────
+function fmtICSDate(d) {
+  // YYYYMMDDTHHMMSS (local) — usiamo orario locale senza timezone
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+}
+
+function workoutTotalSeconds(workout) {
+  return workout.steps.reduce((sum, s) => {
+    if (s.durationType === 'time') return sum + (s.durationValue || 0);
+    // se distanza, stima 6 min/km (fallback)
+    if (s.durationType === 'distance') return sum + Math.round((s.durationValue || 0) / 1000 * 360);
+    return sum;
+  }, 0);
+}
+
+function generateICS(workout, opts = {}) {
+  const start = opts.startDate ? new Date(opts.startDate) : (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(7, 0, 0, 0);
+    return d;
+  })();
+  const totalSec = workoutTotalSeconds(workout) || 3600;
+  const end = new Date(start.getTime() + totalSec * 1000);
+
+  const stepLines = workout.steps.map((s, i) => {
+    const dur = s.durationType === 'time'
+      ? `${Math.round((s.durationValue||0)/60)}min`
+      : `${((s.durationValue||0)/1000).toFixed(2)}km`;
+    const tgt = s.targetType === 'pace' && s.paceRange ? ` @ ${s.paceRange}`
+              : s.targetType === 'hr' && s.hrRange ? ` @ HR ${s.hrRange[0]}-${s.hrRange[1]}`
+              : '';
+    return `${i+1}. ${s.name} — ${dur}${tgt}`;
+  }).join('\\n');
+
+  const description = [
+    workout.notes || '',
+    '',
+    'Step:',
+    stepLines,
+    '',
+    'Generato da RunCoach AI'
+  ].join('\\n');
+
+  const uid = `runcoach-${Date.now()}@runcoach.app`;
+  const now = fmtICSDate(new Date());
+
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//RunCoach AI//Workout//IT',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${now}`,
+    `DTSTART:${fmtICSDate(start)}`,
+    `DTEND:${fmtICSDate(end)}`,
+    `SUMMARY:🏃 ${workout.name}`,
+    `DESCRIPTION:${description}`,
+    'BEGIN:VALARM',
+    'TRIGGER:-PT30M',
+    'ACTION:DISPLAY',
+    `DESCRIPTION:Allenamento tra 30 min — ${workout.name}`,
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+}
+
+function downloadICS(workout, opts = {}) {
+  const ics  = generateICS(workout, opts);
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `${workout.name.replace(/\s+/g,'-')}.ics`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -268,11 +429,25 @@ function StepRow({ step, index, onUpdate, onRemove, accent }) {
 // ─── Main Builder Screen ──────────────────────────────────────────────────────
 function GarminBuilderScreen({ onBack, tweaks }) {
   const accent = tweaks.accentColor || C.orange;
-  const [mode, setMode]           = useState('presets'); // presets | build
+  const [mode, setMode]           = useState('presets'); // presets | build | setup
   const [workout, setWorkout]     = useState(null);
   const [pushing, setPushing]     = useState(false);
-  const [pushResult, setPushResult] = useState(null); // null | 'ok' | 'error' | 'downloaded'
+  const [pushResult, setPushResult] = useState(null); // null | 'ok' | 'error' | 'downloaded' | 'ics' | 'no_backend' | 'auth'
   const [showSuccess, setShowSuccess] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate()+1);
+    return d.toISOString().slice(0,10);
+  });
+  const [backendCfg, setBackendCfg] = useState(getGarminBackend());
+  // setup form
+  const [setupUrl, setSetupUrl]         = useState(backendCfg.url || '');
+  const [setupEmail, setSetupEmail]     = useState(backendCfg.email || '');
+  const [setupPwd, setSetupPwd]         = useState('');
+  const [setupMfa, setSetupMfa]         = useState('');
+  const [setupNeedMfa, setSetupNeedMfa] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupError, setSetupError]     = useState(null);
+  const [setupOk, setSetupOk]           = useState(false);
 
   const selectPreset = (p) => {
     setWorkout(JSON.parse(JSON.stringify(p))); // deep copy
@@ -320,19 +495,120 @@ function GarminBuilderScreen({ onBack, tweaks }) {
     setPushing(true);
     setPushResult(null);
     try {
-      await pushToGarminConnect(workout);
-      setPushResult('ok');
+      const r = await pushToGarminConnect(workout, scheduleDate);
+      setPushResult({ kind:'ok', message: r.message, scheduled: r.scheduled, date: r.schedule_date });
     } catch(e) {
-      // fallback to download
-      setPushResult('error');
+      if (e.code === 'NO_BACKEND')   setPushResult({ kind:'no_backend' });
+      else if (e.code === 'AUTH')    setPushResult({ kind:'auth', detail: e.detail });
+      else                            setPushResult({ kind:'error', detail: e.message });
     }
     setPushing(false);
+  };
+
+  const handleSetupLogin = async () => {
+    setSetupError(null);
+    setSetupLoading(true);
+    try {
+      await loginGarminBackend(setupUrl, setupEmail, setupPwd, setupNeedMfa ? setupMfa : null);
+      setBackendCfg(getGarminBackend());
+      setSetupOk(true);
+      setSetupPwd(''); setSetupMfa('');
+      setTimeout(() => { setMode('build'); setSetupOk(false); }, 1200);
+    } catch(e) {
+      if (e.code === 'MFA') {
+        setSetupNeedMfa(true);
+        setSetupError('Inserisci il codice MFA dal tuo Garmin Authenticator');
+      } else {
+        setSetupError(e.message || 'Login fallito');
+      }
+    }
+    setSetupLoading(false);
+  };
+
+  const handleSetupLogout = () => {
+    clearGarminBackend();
+    setBackendCfg({ url:'', email:'' });
+    setSetupUrl(''); setSetupEmail(''); setSetupPwd(''); setSetupMfa('');
+    setSetupNeedMfa(false); setSetupOk(false);
   };
 
   const handleDownload = () => {
     downloadTCX(workout);
     setPushResult('downloaded');
   };
+
+  const handleICS = () => {
+    downloadICS(workout);
+    setPushResult('ics');
+  };
+
+  // ── Setup view ──
+  if (mode === 'setup') return (
+    <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 16px 14px' }}>
+        <button onClick={() => setMode('presets')} style={{ width:44, height:44, borderRadius:22, background:'rgba(255,255,255,0.07)', border:`1px solid ${C.border}`, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke={C.text} strokeWidth="2" strokeLinecap="round"/></svg>
+        </button>
+        <div>
+          <div style={{ color:C.text, fontSize:20, fontWeight:700, letterSpacing:'-0.3px' }}>Push diretto a Garmin</div>
+          <div style={{ color:C.sub, fontSize:12, marginTop:2 }}>Setup credenziali (una volta sola)</div>
+        </div>
+      </div>
+
+      <div style={{ padding:'0 16px 14px' }}>
+        <div style={{ background:'rgba(255,196,0,0.08)', border:'1px solid rgba(255,196,0,0.25)', borderRadius:14, padding:'12px 14px', marginBottom:14 }}>
+          <div style={{ color:'#ffc400', fontSize:12, fontWeight:600, marginBottom:6 }}>⚠️ Come funziona</div>
+          <div style={{ color:C.sub, fontSize:12, lineHeight:1.5 }}>
+            Garmin non ha un'API pubblica per push. Serve un piccolo server (Python) che fa login al tuo account Garmin e invia gli allenamenti. Devi deployarlo tu (es. su Railway, gratis). Le credenziali vengono salvate criptate sul TUO server, non sui nostri. Vedi README per setup.
+          </div>
+        </div>
+
+        <div style={{ color:C.text, fontSize:13, fontWeight:600, marginBottom:8 }}>URL del tuo server backend</div>
+        <input value={setupUrl} onChange={e => setSetupUrl(e.target.value)} placeholder="https://tuo-server.up.railway.app"
+          style={{ width:'100%', height:44, padding:'0 14px', background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:13, outline:'none', marginBottom:14, fontFamily:'inherit', boxSizing:'border-box' }}/>
+
+        <div style={{ color:C.text, fontSize:13, fontWeight:600, marginBottom:8 }}>Email Garmin Connect</div>
+        <input value={setupEmail} onChange={e => setSetupEmail(e.target.value)} placeholder="email@example.com" type="email"
+          style={{ width:'100%', height:44, padding:'0 14px', background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:13, outline:'none', marginBottom:14, fontFamily:'inherit', boxSizing:'border-box' }}/>
+
+        <div style={{ color:C.text, fontSize:13, fontWeight:600, marginBottom:8 }}>Password Garmin</div>
+        <input value={setupPwd} onChange={e => setSetupPwd(e.target.value)} placeholder="••••••••" type="password"
+          style={{ width:'100%', height:44, padding:'0 14px', background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:13, outline:'none', marginBottom:14, fontFamily:'inherit', boxSizing:'border-box' }}/>
+
+        {setupNeedMfa && (
+          <>
+            <div style={{ color:C.text, fontSize:13, fontWeight:600, marginBottom:8 }}>Codice MFA (6 cifre)</div>
+            <input value={setupMfa} onChange={e => setSetupMfa(e.target.value)} placeholder="123456" inputMode="numeric" maxLength={6}
+              style={{ width:'100%', height:44, padding:'0 14px', background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:13, outline:'none', marginBottom:14, fontFamily:'inherit', boxSizing:'border-box' }}/>
+          </>
+        )}
+
+        {setupError && (
+          <div style={{ background:'rgba(255,75,75,0.1)', border:'1px solid rgba(255,75,75,0.3)', borderRadius:10, padding:'10px 12px', marginBottom:14 }}>
+            <div style={{ color:'#ff6b6b', fontSize:12 }}>{setupError}</div>
+          </div>
+        )}
+
+        {setupOk && (
+          <div style={{ background:'rgba(80,220,160,0.1)', border:'1px solid rgba(80,220,160,0.35)', borderRadius:10, padding:'10px 12px', marginBottom:14 }}>
+            <div style={{ color:'#5fdca0', fontSize:12, fontWeight:600 }}>✓ Connesso! Token salvato.</div>
+          </div>
+        )}
+
+        <button onClick={handleSetupLogin} disabled={setupLoading || !setupUrl || !setupEmail || !setupPwd}
+          style={{ width:'100%', height:50, background: setupLoading ? C.border2 : accent, border:'none', borderRadius:14, color:'#fff', fontSize:14, fontWeight:700, cursor: setupLoading ? 'wait' : 'pointer', marginBottom:10, opacity: (!setupUrl || !setupEmail || !setupPwd) ? 0.4 : 1 }}>
+          {setupLoading ? 'Connessione…' : (setupNeedMfa ? 'Verifica MFA' : 'Connetti')}
+        </button>
+
+        {backendCfg.url && (
+          <button onClick={handleSetupLogout}
+            style={{ width:'100%', height:44, background:'transparent', border:`1px solid ${C.border}`, borderRadius:14, color:C.sub, fontSize:13, cursor:'pointer' }}>
+            Disconnetti
+          </button>
+        )}
+      </div>
+    </div>
+  );
 
   // ── Presets view ──
   if (mode === 'presets') return (
@@ -347,14 +623,19 @@ function GarminBuilderScreen({ onBack, tweaks }) {
         </div>
       </div>
 
-      {/* Garmin chip */}
+      {/* Garmin chip / setup status */}
       <div style={{ padding:'0 16px 16px' }}>
-        <div style={{ background: C.blueDim, border:`1px solid ${C.blue}33`, borderRadius:14, padding:'12px 14px', display:'flex', alignItems:'center', gap:10 }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke={C.blue} strokeWidth="1.8" strokeLinejoin="round"/></svg>
-          <div>
-            <div style={{ color:C.blue, fontSize:13, fontWeight:600 }}>Garmin Connect · {USER.garminDevice}</div>
-            <div style={{ color:C.sub, fontSize:11, marginTop:2 }}>Esporta allenamenti strutturati (.tcx) o invia direttamente</div>
+        <div onClick={() => setMode('setup')} style={{ cursor:'pointer', background: backendCfg.url ? C.blueDim : 'rgba(255,255,255,0.04)', border:`1px solid ${backendCfg.url ? C.blue+'33' : C.border}`, borderRadius:14, padding:'12px 14px', display:'flex', alignItems:'center', gap:10 }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke={backendCfg.url ? C.blue : C.sub} strokeWidth="1.8" strokeLinejoin="round"/></svg>
+          <div style={{ flex:1 }}>
+            <div style={{ color: backendCfg.url ? C.blue : C.text, fontSize:13, fontWeight:600 }}>
+              {backendCfg.url ? `Garmin Connect · ${backendCfg.email || 'connesso'}` : 'Configura push diretto a Garmin'}
+            </div>
+            <div style={{ color:C.sub, fontSize:11, marginTop:2 }}>
+              {backendCfg.url ? 'Push diretto attivo · tocca per cambiare' : 'Senza setup: download .tcx + import manuale'}
+            </div>
           </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke={C.sub} strokeWidth="2" strokeLinecap="round"/></svg>
         </div>
       </div>
 
@@ -429,17 +710,49 @@ function GarminBuilderScreen({ onBack, tweaks }) {
         </button>
       </div>
 
+      {/* Schedule date picker */}
+      <div style={{ padding:'4px 16px 8px' }}>
+        <div style={{ color:C.sub, fontSize:11, fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.5px' }}>Data allenamento</div>
+        <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)}
+          style={{ width:'100%', height:44, padding:'0 14px', background:'rgba(255,255,255,0.05)', border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:14, outline:'none', fontFamily:'inherit', boxSizing:'border-box', colorScheme:'dark' }}/>
+      </div>
+
       {/* Result feedback */}
-      {pushResult === 'ok' && (
+      {pushResult?.kind === 'ok' && (
         <div style={{ margin:'8px 16px', background:C.tealDim, border:`1px solid ${C.teal}44`, borderRadius:14, padding:'14px 16px' }}>
-          <div style={{ color:C.teal, fontSize:14, fontWeight:700, marginBottom:4 }}>✓ Inviato a Garmin Connect!</div>
-          <div style={{ color:C.sub, fontSize:12 }}>Trovi l'allenamento in "Allenamenti" su Garmin Connect e sulla tua {USER.garminDevice}.</div>
+          <div style={{ color:C.teal, fontSize:14, fontWeight:700, marginBottom:4 }}>
+            ✓ {pushResult.scheduled ? `Schedulato per ${new Date(pushResult.date).toLocaleDateString('it-IT', { weekday:'long', day:'numeric', month:'long' })}!` : 'Inviato a Garmin Connect!'}
+          </div>
+          <div style={{ color:C.sub, fontSize:12 }}>{pushResult.message || `Trovi l'allenamento in "Allenamenti" su Garmin Connect e sulla tua ${USER.garminDevice}.`}</div>
         </div>
       )}
-      {pushResult === 'error' && (
+      {pushResult?.kind === 'no_backend' && (
         <div style={{ margin:'8px 16px', background:'rgba(255,200,0,0.08)', border:'1px solid rgba(255,200,0,0.25)', borderRadius:14, padding:'14px 16px' }}>
-          <div style={{ color:C.yellow, fontSize:13, fontWeight:600, marginBottom:6 }}>⚠ Push diretto non disponibile</div>
-          <div style={{ color:C.sub, fontSize:12, lineHeight:1.55, marginBottom:10 }}>Devi essere loggato su Garmin Connect nello stesso browser. Usa il download TCX — si importa in 2 click.</div>
+          <div style={{ color:C.yellow, fontSize:13, fontWeight:600, marginBottom:6 }}>⚠ Backend non configurato</div>
+          <div style={{ color:C.sub, fontSize:12, lineHeight:1.55, marginBottom:10 }}>Per push diretto serve un server. Configuralo una volta sola, oppure scarica il file .tcx e importalo manualmente.</div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={() => setMode('setup')} style={{ flex:1, height:42, background:accent, border:'none', borderRadius:10, color:'white', fontSize:13, fontWeight:700, cursor:'pointer' }}>
+              ⚙ Configura
+            </button>
+            <button onClick={handleDownload} style={{ flex:1, height:42, background:C.blue, border:'none', borderRadius:10, color:'white', fontSize:13, fontWeight:700, cursor:'pointer' }}>
+              ⬇ Scarica .tcx
+            </button>
+          </div>
+        </div>
+      )}
+      {pushResult?.kind === 'auth' && (
+        <div style={{ margin:'8px 16px', background:'rgba(255,75,75,0.1)', border:'1px solid rgba(255,75,75,0.3)', borderRadius:14, padding:'14px 16px' }}>
+          <div style={{ color:'#ff6b6b', fontSize:13, fontWeight:600, marginBottom:6 }}>🔒 Sessione Garmin scaduta</div>
+          <div style={{ color:C.sub, fontSize:12, lineHeight:1.55, marginBottom:10 }}>{pushResult.detail || 'Devi rifare login al backend.'}</div>
+          <button onClick={() => setMode('setup')} style={{ width:'100%', height:42, background:accent, border:'none', borderRadius:10, color:'white', fontSize:13, fontWeight:700, cursor:'pointer' }}>
+            ⚙ Riconnetti Garmin
+          </button>
+        </div>
+      )}
+      {pushResult?.kind === 'error' && (
+        <div style={{ margin:'8px 16px', background:'rgba(255,200,0,0.08)', border:'1px solid rgba(255,200,0,0.25)', borderRadius:14, padding:'14px 16px' }}>
+          <div style={{ color:C.yellow, fontSize:13, fontWeight:600, marginBottom:6 }}>⚠ Push fallito</div>
+          <div style={{ color:C.sub, fontSize:12, lineHeight:1.55, marginBottom:10 }}>{pushResult.detail || 'Errore di rete'}. Usa il download .tcx come backup.</div>
           <button onClick={handleDownload} style={{ width:'100%', height:42, background:C.blue, border:'none', borderRadius:10, color:'white', fontSize:13, fontWeight:700, cursor:'pointer' }}>
             ⬇ Scarica file .tcx
           </button>
@@ -457,17 +770,34 @@ function GarminBuilderScreen({ onBack, tweaks }) {
         </div>
       )}
 
+      {pushResult === 'ics' && (
+        <div style={{ margin:'8px 16px', background:`${accent}1a`, border:`1px solid ${accent}44`, borderRadius:14, padding:'14px 16px' }}>
+          <div style={{ color:accent, fontSize:14, fontWeight:700, marginBottom:6 }}>✓ Evento calendario scaricato!</div>
+          <div style={{ color:C.sub, fontSize:12, lineHeight:1.55 }}>
+            1. Apri il file <b style={{ color:C.text }}>.ics</b> dalle Notifiche del telefono<br/>
+            2. Conferma "Aggiungi al calendario"<br/>
+            3. Riceverai un promemoria 30 min prima ⏰
+          </div>
+        </div>
+      )}
+
       {/* Action buttons */}
-      <div style={{ padding:'12px 16px 28px', display:'flex', gap:10 }}>
+      <div style={{ padding:'12px 16px 12px', display:'flex', gap:10 }}>
+        <button onClick={handleICS} style={{ flex:1, height:54, background:`${accent}1a`, border:`1px solid ${accent}44`, borderRadius:16, color:accent, fontSize:13, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z" stroke={accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          Calendario
+        </button>
         <button onClick={handleDownload} style={{ flex:1, height:54, background:C.blueDim, border:`1px solid ${C.blue}44`, borderRadius:16, color:C.blue, fontSize:13, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2v13M7 11l5 5 5-5M3 19h18" stroke={C.blue} strokeWidth="2" strokeLinecap="round"/></svg>
-          Scarica .tcx
+          .tcx
         </button>
-        <button onClick={handlePush} disabled={pushing} style={{ flex:1.4, height:54, background: pushing ? 'rgba(255,255,255,0.08)' : accent, border:'none', borderRadius:16, color:'white', fontSize:13, fontWeight:700, cursor: pushing ? 'default' : 'pointer', boxShadow: pushing ? 'none' : `0 4px 20px ${accent}44`, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+      </div>
+      <div style={{ padding:'0 16px 28px' }}>
+        <button onClick={handlePush} disabled={pushing} style={{ width:'100%', height:54, background: pushing ? 'rgba(255,255,255,0.08)' : accent, border:'none', borderRadius:16, color:'white', fontSize:14, fontWeight:700, cursor: pushing ? 'default' : 'pointer', boxShadow: pushing ? 'none' : `0 4px 20px ${accent}44`, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
           {pushing ? (
             <><div style={{ width:16, height:16, borderRadius:8, border:'2px solid white', borderTopColor:'transparent', animation:'spin 0.8s linear infinite' }}/> Invio…</>
           ) : (
-            <><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="1.8" strokeLinejoin="round"/></svg> Invia a Garmin</>
+            <><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" strokeWidth="1.8" strokeLinejoin="round"/></svg> Invia a Garmin Connect</>
           )}
         </button>
       </div>
@@ -476,4 +806,4 @@ function GarminBuilderScreen({ onBack, tweaks }) {
   );
 }
 
-Object.assign(window, { GarminBuilderScreen, PRESET_WORKOUTS, generateTCX, downloadTCX, pushToGarminConnect });
+Object.assign(window, { GarminBuilderScreen, PRESET_WORKOUTS, generateTCX, downloadTCX, generateICS, downloadICS, pushToGarminConnect });
