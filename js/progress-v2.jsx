@@ -111,7 +111,7 @@ function ProgressV2({ tweaks }) {
           </div>
 
           {/* Form curve grafico */}
-          <FormCurve history={loadHistory} height={140}/>
+          <FormCurve history={loadHistory} height={200}/>
 
           {/* Legenda */}
           <div style={{ display:'flex', justifyContent:'space-between', marginTop: 12, gap: 12 }}>

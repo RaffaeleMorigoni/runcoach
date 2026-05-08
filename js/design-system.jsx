@@ -252,42 +252,81 @@ function MiniChart({ data, color, height = 80, showAxis = false, fillArea = true
   );
 }
 
-// ─── FormCurve: visualizzatore CTL+ATL+TSB sovrapposti ───────────────────────
-function FormCurve({ history, height = 160 }) {
-  // history = [{ date, ctl, atl, tsb }, ...]
-  if (!history?.length) return <div style={{ height, color: NEON.textFaint, fontSize: 12, display:'flex', alignItems:'center', justifyContent:'center' }}>Nessun dato</div>;
+// ─── FormCurve: CTL/ATL nel pannello sopra, TSB strip firmata sotto ─────────
+// Layout pulito a due fasce + griglia + tooltip su tap/drag + etichette tempo.
+function FormCurve({ history, height = 200 }) {
+  if (!history?.length) {
+    return <div style={{ height, color: NEON.textFaint, fontSize: 12, display:'flex', alignItems:'center', justifyContent:'center' }}>Nessun dato sufficiente</div>;
+  }
 
-  const w = 320;
-  const h = height;
-  const padTop = 12;
-  const padBot = 22;
-  const inner = h - padTop - padBot;
+  // viewBox in unità "logiche". Il viewBox preserva l'aspect ratio (no preserveAspectRatio="none")
+  // così testi/cerchi non si deformano.
+  const W = 360;
+  const H = height;
+  const padL = 26, padR = 10, padT = 14, padB = 22;
+  const innerW = W - padL - padR;
 
-  const ctlVals = history.map(d => d.ctl);
-  const atlVals = history.map(d => d.atl);
-  const tsbVals = history.map(d => d.tsb);
+  // due fasce: top = CTL/ATL (60%), bottom = TSB (40%)
+  const topH = Math.round((H - padT - padB) * 0.62);
+  const botH = (H - padT - padB) - topH;
+  const gap  = 6;
 
-  const yMax = Math.max(...ctlVals, ...atlVals, 50);
-  const yMin = Math.min(...tsbVals, -10);
-  const yRange = yMax - yMin || 1;
+  const ctlVals = history.map(d => Math.max(0, d.ctl || 0));
+  const atlVals = history.map(d => Math.max(0, d.atl || 0));
+  const tsbVals = history.map(d => d.tsb || 0);
 
-  const sx = (i) => (i / (history.length - 1 || 1)) * w;
-  const sy = (v) => padTop + inner - ((v - yMin) / yRange) * inner;
+  // Top axis
+  const topMax = Math.max(...ctlVals, ...atlVals, 30);
+  // round up to nearest 10 for nice ticks
+  const topMaxNice = Math.ceil(topMax / 10) * 10;
 
-  const toPath = (vals) => vals.map((v, i) => `${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join(' ');
-  const ctlPath = toPath(ctlVals);
-  const atlPath = toPath(atlVals);
-  const tsbPath = toPath(tsbVals);
+  // Bottom axis: simmetrico attorno a 0 con padding
+  const tsbAbsMax = Math.max(15, Math.ceil(Math.max(...tsbVals.map(Math.abs)) / 5) * 5);
 
-  // Zero line per TSB
-  const zeroY = sy(0);
+  const N = history.length;
+  const sx = (i) => padL + (N <= 1 ? innerW / 2 : (i / (N - 1)) * innerW);
+  const syTop = (v) => padT + (topH - (v / topMaxNice) * topH);
+  const tsbBaseY = padT + topH + gap + botH / 2;
+  const syBot = (v) => tsbBaseY - (v / tsbAbsMax) * (botH / 2);
 
+  // smooth path con Catmull-Rom -> Bezier
+  const smooth = (pts) => {
+    if (pts.length < 2) return '';
+    let d = `M ${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const t = 0.18;
+      const c1x = p1[0] + (p2[0] - p0[0]) * t;
+      const c1y = p1[1] + (p2[1] - p0[1]) * t;
+      const c2x = p2[0] - (p3[0] - p1[0]) * t;
+      const c2y = p2[1] - (p3[1] - p1[1]) * t;
+      d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`;
+    }
+    return d;
+  };
+
+  const ctlPts = ctlVals.map((v, i) => [sx(i), syTop(v)]);
+  const atlPts = atlVals.map((v, i) => [sx(i), syTop(v)]);
+  const tsbPts = tsbVals.map((v, i) => [sx(i), syBot(v)]);
+
+  const ctlPath = smooth(ctlPts);
+  const atlPath = smooth(atlPts);
+  const tsbPath = smooth(tsbPts);
+
+  const ctlBase = padT + topH;
+  const ctlArea = `${ctlPath} L ${ctlPts[ctlPts.length-1][0].toFixed(2)} ${ctlBase} L ${ctlPts[0][0].toFixed(2)} ${ctlBase} Z`;
+  const atlArea = `${atlPath} L ${atlPts[atlPts.length-1][0].toFixed(2)} ${ctlBase} L ${atlPts[0][0].toFixed(2)} ${ctlBase} Z`;
+
+  // animazione fade-in
   const [drawn, setDrawn] = useStateDS(0);
   useEffectDS(() => {
     const start = performance.now();
     let raf;
     const tick = (now) => {
-      const t = Math.min(1, (now - start) / 1200);
+      const t = Math.min(1, (now - start) / 900);
       const eased = 1 - Math.pow(1 - t, 3);
       setDrawn(eased);
       if (t < 1) raf = requestAnimationFrame(tick);
@@ -296,81 +335,149 @@ function FormCurve({ history, height = 160 }) {
     return () => cancelAnimationFrame(raf);
   }, [history.length]);
 
-  const pathLen = w * 1.5;
-  const lastIdx = history.length - 1;
+  // hover/tap per tooltip
+  const [hoverIdx, setHoverIdx] = useStateDS(null);
+  const svgRef = useRefDS(null);
+
+  const onMove = (e) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const cx = (e.touches?.[0]?.clientX ?? e.clientX) - rect.left;
+    const ratio = W / rect.width;
+    const xLogical = cx * ratio;
+    const xInner = xLogical - padL;
+    const t = Math.max(0, Math.min(1, xInner / innerW));
+    const idx = Math.round(t * (N - 1));
+    setHoverIdx(idx);
+  };
+  const onLeave = () => setHoverIdx(null);
+
+  const lastIdx = N - 1;
+  const activeIdx = hoverIdx ?? lastIdx;
+  const a = history[activeIdx];
+
+  // Etichette x: -30gg, -15gg, oggi (più "metà" se c'è spazio)
+  const xLabels = [];
+  if (N > 1) {
+    xLabels.push({ idx: 0, text: `-${N-1}gg` });
+    if (N >= 8) xLabels.push({ idx: Math.floor((N - 1) / 2), text: `-${Math.round((N-1)/2)}gg` });
+    xLabels.push({ idx: lastIdx, text: 'oggi' });
+  }
+
+  // TSB color band per ultimo valore
+  const tsbColor = a.tsb >= 10 ? NEON.teal : a.tsb >= -10 ? NEON.purple : NEON.orange;
 
   return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ overflow:'visible' }}>
+    <svg
+      ref={svgRef}
+      width="100%"
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ display:'block', overflow:'visible', touchAction:'none' }}
+      onMouseMove={onMove}
+      onMouseLeave={onLeave}
+      onTouchStart={onMove}
+      onTouchMove={onMove}
+      onTouchEnd={onLeave}
+    >
       <defs>
-        <linearGradient id="ctlFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={NEON.teal} stopOpacity="0.25"/>
+        <linearGradient id="fcCtlFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={NEON.teal} stopOpacity="0.32"/>
           <stop offset="100%" stopColor={NEON.teal} stopOpacity="0"/>
         </linearGradient>
-        <linearGradient id="atlFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={NEON.orange} stopOpacity="0.18"/>
+        <linearGradient id="fcAtlFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={NEON.orange} stopOpacity="0.22"/>
           <stop offset="100%" stopColor={NEON.orange} stopOpacity="0"/>
         </linearGradient>
+        <linearGradient id="fcTsbPos" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={NEON.teal} stopOpacity="0.45"/>
+          <stop offset="100%" stopColor={NEON.teal} stopOpacity="0.05"/>
+        </linearGradient>
+        <linearGradient id="fcTsbNeg" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0%" stopColor={NEON.orange} stopOpacity="0.45"/>
+          <stop offset="100%" stopColor={NEON.orange} stopOpacity="0.05"/>
+        </linearGradient>
+        <clipPath id="fcTsbPosClip">
+          <rect x="0" y={padT + topH + gap} width={W} height={tsbBaseY - (padT + topH + gap)} />
+        </clipPath>
+        <clipPath id="fcTsbNegClip">
+          <rect x="0" y={tsbBaseY} width={W} height={padT + topH + gap + botH - tsbBaseY} />
+        </clipPath>
       </defs>
 
-      {/* Zero baseline */}
-      <line x1="0" y1={zeroY} x2={w} y2={zeroY} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vectorEffect="non-scaling-stroke"/>
+      {/* Y-axis ticks pannello superiore */}
+      {[0, 0.5, 1].map((p, i) => {
+        const y = padT + topH * (1 - p);
+        const v = Math.round(topMaxNice * p);
+        return (
+          <g key={`yt-${i}`}>
+            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray={i === 0 ? '0' : '2 4'} vectorEffect="non-scaling-stroke"/>
+            <text x={padL - 5} y={y + 3} textAnchor="end" fontSize="9" fill={NEON.textFaint} fontWeight="600">{v}</text>
+          </g>
+        );
+      })}
 
-      {/* CTL area */}
-      <polygon
-        points={`0,${padTop + inner} ${ctlPath} ${w},${padTop + inner}`}
-        fill="url(#ctlFill)"
-        opacity={drawn}
-      />
+      {/* Pannello CTL/ATL */}
+      <g opacity={drawn}>
+        <path d={atlArea} fill="url(#fcAtlFill)"/>
+        <path d={ctlArea} fill="url(#fcCtlFill)"/>
+        <path d={atlPath} fill="none" stroke={NEON.orange} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" style={{ filter:`drop-shadow(0 0 3px ${NEON.orange}88)` }}/>
+        <path d={ctlPath} fill="none" stroke={NEON.teal}   strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" style={{ filter:`drop-shadow(0 0 4px ${NEON.teal}aa)` }}/>
+      </g>
 
-      {/* ATL area */}
-      <polygon
-        points={`0,${padTop + inner} ${atlPath} ${w},${padTop + inner}`}
-        fill="url(#atlFill)"
-        opacity={drawn * 0.8}
-      />
+      {/* Strip TSB */}
+      {/* sfondo strip */}
+      <rect x={padL} y={padT + topH + gap} width={innerW} height={botH} fill="rgba(255,255,255,0.025)" rx="4"/>
+      {/* baseline 0 */}
+      <line x1={padL} y1={tsbBaseY} x2={W - padR} y2={tsbBaseY} stroke="rgba(255,255,255,0.18)" vectorEffect="non-scaling-stroke"/>
+      {/* zone target piccolo glow attorno a 0±10 */}
+      <rect x={padL} y={tsbBaseY - (10 / tsbAbsMax) * (botH / 2)} width={innerW}
+            height={(20 / tsbAbsMax) * (botH / 2)} fill={NEON.purple} opacity="0.05" rx="2"/>
+      {/* TSB area positivo */}
+      <g opacity={drawn} clipPath="url(#fcTsbPosClip)">
+        <path d={`${tsbPath} L ${tsbPts[lastIdx][0].toFixed(2)} ${tsbBaseY} L ${tsbPts[0][0].toFixed(2)} ${tsbBaseY} Z`} fill="url(#fcTsbPos)"/>
+      </g>
+      <g opacity={drawn} clipPath="url(#fcTsbNegClip)">
+        <path d={`${tsbPath} L ${tsbPts[lastIdx][0].toFixed(2)} ${tsbBaseY} L ${tsbPts[0][0].toFixed(2)} ${tsbBaseY} Z`} fill="url(#fcTsbNeg)"/>
+      </g>
+      {/* TSB linea */}
+      <path d={tsbPath} fill="none" stroke={NEON.purple} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" opacity={drawn} style={{ filter:`drop-shadow(0 0 3px ${NEON.purple}aa)` }}/>
+      {/* etichetta TSB */}
+      <text x={padL - 5} y={tsbBaseY + 3} textAnchor="end" fontSize="9" fill={NEON.textFaint} fontWeight="600">0</text>
+      <text x={padL - 5} y={padT + topH + gap + 9} textAnchor="end" fontSize="9" fill={NEON.textFaint} fontWeight="600">+{tsbAbsMax}</text>
+      <text x={padL - 5} y={padT + topH + gap + botH - 1} textAnchor="end" fontSize="9" fill={NEON.textFaint} fontWeight="600">−{tsbAbsMax}</text>
 
-      {/* TSB line */}
-      <polyline
-        points={tsbPath}
-        fill="none"
-        stroke={NEON.purple}
-        strokeWidth="1.5"
-        strokeDasharray={pathLen}
-        strokeDashoffset={pathLen * (1 - drawn)}
-        vectorEffect="non-scaling-stroke"
-        style={{ filter: `drop-shadow(0 0 3px ${NEON.purple}aa)` }}
-      />
+      {/* Etichette x */}
+      {xLabels.map((l, i) => (
+        <text key={`xl-${i}`} x={sx(l.idx)} y={H - 6} textAnchor={l.idx === 0 ? 'start' : l.idx === lastIdx ? 'end' : 'middle'} fontSize="9.5" fill={NEON.textFaint} fontWeight="600">{l.text}</text>
+      ))}
 
-      {/* CTL line */}
-      <polyline
-        points={ctlPath}
-        fill="none"
-        stroke={NEON.teal}
-        strokeWidth="2"
-        strokeDasharray={pathLen}
-        strokeDashoffset={pathLen * (1 - drawn)}
-        vectorEffect="non-scaling-stroke"
-        style={{ filter: `drop-shadow(0 0 4px ${NEON.teal})` }}
-      />
-
-      {/* ATL line */}
-      <polyline
-        points={atlPath}
-        fill="none"
-        stroke={NEON.orange}
-        strokeWidth="1.5"
-        strokeDasharray={pathLen}
-        strokeDashoffset={pathLen * (1 - drawn)}
-        vectorEffect="non-scaling-stroke"
-        style={{ filter: `drop-shadow(0 0 3px ${NEON.orange}aa)` }}
-      />
-
-      {/* Last point markers */}
-      {drawn > 0.95 && (
+      {/* Hover guide + dot + tooltip */}
+      {drawn > 0.9 && a && (
         <g>
-          <circle cx={sx(lastIdx)} cy={sy(ctlVals[lastIdx])} r="3" fill={NEON.teal} style={{ filter: `drop-shadow(0 0 6px ${NEON.teal})` }}/>
-          <circle cx={sx(lastIdx)} cy={sy(atlVals[lastIdx])} r="2.5" fill={NEON.orange} style={{ filter: `drop-shadow(0 0 5px ${NEON.orange})` }}/>
-          <circle cx={sx(lastIdx)} cy={sy(tsbVals[lastIdx])} r="2.5" fill={NEON.purple} style={{ filter: `drop-shadow(0 0 5px ${NEON.purple})` }}/>
+          <line x1={sx(activeIdx)} y1={padT} x2={sx(activeIdx)} y2={H - padB} stroke="rgba(255,255,255,0.18)" strokeDasharray="2 3" vectorEffect="non-scaling-stroke"/>
+          <circle cx={sx(activeIdx)} cy={syTop(ctlVals[activeIdx])} r="3.5" fill={NEON.teal}   stroke={NEON.bg} strokeWidth="1.5" style={{ filter:`drop-shadow(0 0 5px ${NEON.teal})` }}/>
+          <circle cx={sx(activeIdx)} cy={syTop(atlVals[activeIdx])} r="3"   fill={NEON.orange} stroke={NEON.bg} strokeWidth="1.5" style={{ filter:`drop-shadow(0 0 5px ${NEON.orange})` }}/>
+          <circle cx={sx(activeIdx)} cy={syBot(tsbVals[activeIdx])} r="3"   fill={tsbColor}    stroke={NEON.bg} strokeWidth="1.5" style={{ filter:`drop-shadow(0 0 5px ${tsbColor})` }}/>
+
+          {/* Tooltip */}
+          {(() => {
+            const tx = sx(activeIdx);
+            const right = tx > W - 90;
+            const boxX = right ? tx - 84 : tx + 8;
+            const boxY = padT + 4;
+            const dt = new Date(a.date);
+            const dayLabel = isNaN(dt) ? '' : dt.toLocaleDateString('it-IT', { day:'numeric', month:'short' });
+            return (
+              <g>
+                <rect x={boxX} y={boxY} width="76" height="56" rx="6" fill="rgba(8,8,18,0.95)" stroke={NEON.borderHi} strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
+                <text x={boxX + 6} y={boxY + 13} fontSize="8.5" fontWeight="700" fill={NEON.textDim} letterSpacing="0.06em">{dayLabel.toUpperCase()}</text>
+                <text x={boxX + 6} y={boxY + 26} fontSize="9" fill={NEON.teal}   fontWeight="700">CTL <tspan fill={NEON.text}>{Math.round(a.ctl)}</tspan></text>
+                <text x={boxX + 6} y={boxY + 38} fontSize="9" fill={NEON.orange} fontWeight="700">ATL <tspan fill={NEON.text}>{Math.round(a.atl)}</tspan></text>
+                <text x={boxX + 6} y={boxY + 50} fontSize="9" fill={tsbColor}    fontWeight="700">TSB <tspan fill={NEON.text}>{a.tsb >= 0 ? '+' : ''}{Math.round(a.tsb)}</tspan></text>
+              </g>
+            );
+          })()}
         </g>
       )}
     </svg>
