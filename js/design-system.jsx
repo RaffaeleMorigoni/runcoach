@@ -252,6 +252,142 @@ function MiniChart({ data, color, height = 80, showAxis = false, fillArea = true
   );
 }
 
+// ─── WeeklyLoadBars: barre del TSS per settimana (no linee, leggibile) ──────
+function WeeklyLoadBars({ history, weeks = 8 }) {
+  if (!history?.length) {
+    return <div style={{ height: 140, color: NEON.textFaint, fontSize: 12, display:'flex', alignItems:'center', justifyContent:'center' }}>Nessun dato</div>;
+  }
+  const today = new Date(); today.setHours(0,0,0,0);
+  const buckets = [];
+  for (let w = weeks - 1; w >= 0; w--) {
+    const endDay = new Date(today); endDay.setDate(today.getDate() - w * 7);
+    const startDay = new Date(endDay); startDay.setDate(endDay.getDate() - 6);
+    let tss = 0, ctlEnd = null, atlEnd = null, tsbEnd = null;
+    for (const d of history) {
+      const dt = new Date(d.date); dt.setHours(0,0,0,0);
+      if (dt >= startDay && dt <= endDay) {
+        tss += d.tss || 0;
+        ctlEnd = d.ctl ?? ctlEnd;
+        atlEnd = d.atl ?? atlEnd;
+        tsbEnd = d.tsb ?? tsbEnd;
+      }
+    }
+    buckets.push({
+      label: w === 0 ? 'sett' : `−${w}`,
+      tss, ctl: ctlEnd ?? 0, atl: atlEnd ?? 0, tsb: tsbEnd ?? 0,
+      isCurrent: w === 0,
+    });
+  }
+  const maxTss = Math.max(...buckets.map(b => b.tss), 100);
+  const [shown, setShown] = useStateDS(false);
+  useEffectDS(() => { const t = setTimeout(() => setShown(true), 30); return () => clearTimeout(t); }, []);
+  const colorFor = (b) => {
+    if (b.tss === 0) return 'rgba(255,255,255,0.12)';
+    if (b.tsb >= 5)  return NEON.teal;
+    if (b.tsb >= -10) return NEON.blue;
+    if (b.tsb >= -20) return NEON.yellow;
+    return NEON.orange;
+  };
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'flex-end', gap: 6, height: 130 }}>
+        {buckets.map((b, i) => {
+          const h = b.tss > 0 ? Math.max(8, (b.tss / maxTss) * 110) : 6;
+          const col = colorFor(b);
+          return (
+            <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap: 6 }}>
+              <div style={{ color: b.tss > 0 ? NEON.text : NEON.textFaint, fontSize: 10, fontWeight: 700, lineHeight: 1, height: 12 }}>
+                {b.tss > 0 ? Math.round(b.tss) : '·'}
+              </div>
+              <div style={{
+                width: '100%', height: shown ? h : 6,
+                background: `linear-gradient(180deg, ${col}, ${col}55)`,
+                borderRadius: 6,
+                boxShadow: b.isCurrent ? `0 0 14px ${col}99` : 'none',
+                border: b.isCurrent ? `1px solid ${col}` : '1px solid rgba(255,255,255,0.04)',
+                transition: 'height 0.6s cubic-bezier(.2,.7,.3,1)',
+              }}/>
+              <div style={{ color: b.isCurrent ? NEON.text : NEON.textFaint, fontSize: 9, fontWeight: b.isCurrent ? 700 : 500 }}>{b.label}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-around', marginTop: 10, gap: 8, flexWrap:'wrap' }}>
+        {[
+          ['Forma', NEON.teal], ['OK', NEON.blue], ['Stanco', NEON.yellow], ['Sovracc.', NEON.orange]
+        ].map(([t,c]) => (
+          <div key={t} style={{ display:'flex', alignItems:'center', gap: 5 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: c }}/>
+            <span style={{ color: NEON.textDim, fontSize: 10 }}>{t}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── FormDial: gauge semicircolare per TSB ─────────────────────────────────
+function FormDial({ tsb = 0, ctl = 0, atl = 0, size = 220 }) {
+  const v = Math.max(-30, Math.min(30, +tsb || 0));
+  const pct = (v + 30) / 60;
+  const w = size, h = size * 0.62;
+  const cx = w/2, cy = h - 4, r = (w / 2) - 14;
+  const startAng = Math.PI, endAng = 2 * Math.PI;
+  const ang = startAng + (endAng - startAng) * pct;
+  const nx = cx + r * Math.cos(ang);
+  const ny = cy + r * Math.sin(ang);
+  const col = v >= 5 ? NEON.teal : v >= -10 ? NEON.blue : v >= -20 ? NEON.yellow : NEON.orange;
+  const label = v >= 5 ? 'IN FORMA' : v >= -10 ? 'OK' : v >= -20 ? 'STANCO' : 'SOVRACCARICO';
+  const [shown, setShown] = useStateDS(0);
+  useEffectDS(() => {
+    let raf; const start = performance.now();
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / 900);
+      setShown(1 - Math.pow(1 - t, 3));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [v]);
+  const segments = [
+    { from: 0,    to: 0.33, color: NEON.orange + '55' },
+    { from: 0.33, to: 0.50, color: NEON.yellow + '55' },
+    { from: 0.50, to: 0.66, color: NEON.blue   + '55' },
+    { from: 0.66, to: 1,    color: NEON.teal   + '55' },
+  ];
+  const arcPath = (from, to) => {
+    const a0 = startAng + (endAng - startAng) * from;
+    const a1 = startAng + (endAng - startAng) * to;
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`;
+  };
+  return (
+    <div style={{ position:'relative', width: w, height: h + 30, margin:'0 auto' }}>
+      <svg width={w} height={h + 4} viewBox={`0 0 ${w} ${h + 4}`} style={{ overflow:'visible' }}>
+        {segments.map((s, i) => (
+          <path key={i} d={arcPath(s.from, s.to)} fill="none" stroke={s.color} strokeWidth="12" vectorEffect="non-scaling-stroke"/>
+        ))}
+        <path d={arcPath(0, Math.max(0.005, pct * shown))} fill="none" stroke={col} strokeWidth="12" strokeLinecap="round" vectorEffect="non-scaling-stroke" style={{ filter:`drop-shadow(0 0 8px ${col}aa)` }}/>
+        <circle cx={nx} cy={ny} r="6" fill={col} style={{ filter:`drop-shadow(0 0 8px ${col})` }}/>
+        <circle cx={nx} cy={ny} r="2.5" fill={NEON.bg}/>
+        <text x={cx - r} y={cy + 16} textAnchor="middle" fontSize="9" fill={NEON.textFaint} fontWeight="700">−30</text>
+        <text x={cx}     y={4}       textAnchor="middle" fontSize="9" fill={NEON.textFaint} fontWeight="700">0</text>
+        <text x={cx + r} y={cy + 16} textAnchor="middle" fontSize="9" fill={NEON.textFaint} fontWeight="700">+30</text>
+      </svg>
+      <div style={{ position:'absolute', left: 0, right: 0, bottom: 0, textAlign:'center' }}>
+        <div style={{ color: col, fontSize: 42, fontWeight: 900, letterSpacing:'-0.04em', lineHeight: 1, textShadow:`0 0 14px ${col}55` }}>
+          {v >= 0 ? '+' : ''}{Math.round(v)}
+        </div>
+        <div style={{ color: col, fontSize: 10, fontWeight: 800, letterSpacing:'0.18em', marginTop: 4 }}>{label}</div>
+        <div style={{ color: NEON.textFaint, fontSize: 9, marginTop: 4, fontWeight: 600 }}>
+          CTL {Math.round(ctl)} · ATL {Math.round(atl)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── FormCurve: CTL/ATL nel pannello sopra, TSB strip firmata sotto ─────────
 // Layout pulito a due fasce + griglia + tooltip su tap/drag + etichette tempo.
 function FormCurve({ history, height = 200 }) {
@@ -642,10 +778,10 @@ function SectionHeader({ kicker, title, action, color }) {
         {kicker && (
           <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 4 }}>
             <div style={{ width: 4, height: 4, borderRadius: 2, background: c, boxShadow: `0 0 6px ${c}` }}/>
-            <span style={{ color: c, fontSize: 10, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase' }}>{kicker}</span>
+            <span style={{ color: c, fontSize: 11, fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase', fontFamily:'Bebas Neue, sans-serif' }}>{kicker}</span>
           </div>
         )}
-        <div style={{ color: NEON.text, fontSize: 17, fontWeight: 700, letterSpacing: '-0.02em' }}>{title}</div>
+        <div className="font-script" style={{ color: NEON.text, fontSize: 26, fontWeight: 700, letterSpacing: '-0.4px', lineHeight: 0.95 }}>{title}</div>
       </div>
       {action && (
         <div onClick={action.onClick} style={{ color: c, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>{action.label}</div>
@@ -674,7 +810,7 @@ function StatPill({ icon, label, value, color }) {
 // Export
 Object.assign(window, {
   NEON,
-  BigNumber, AnimatedRing, GlowCard, MiniChart, FormCurve, PolylineMap,
+  BigNumber, AnimatedRing, GlowCard, MiniChart, FormCurve, FormDial, WeeklyLoadBars, PolylineMap,
   PulseDot, SectionHeader, StatPill,
   decodePolyline,
 });

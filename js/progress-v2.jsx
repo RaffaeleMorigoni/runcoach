@@ -89,63 +89,32 @@ function ProgressV2({ tweaks }) {
         </div>
       </div>
 
-      {/* TSB Big number hero */}
+      {/* Hero: dial TSB grande + barre settimanali */}
       <div style={{ padding: '0 14px 14px' }}>
         <GlowCard glow={form.color} intensity={0.2}>
-          <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom: 18 }}>
-            <div>
-              <div style={{ color: NEON.textFaint, fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 6 }}>TRAINING STRESS BALANCE</div>
-              <div style={{ display:'flex', alignItems:'baseline', gap: 6 }}>
-                <BigNumber
-                  value={last.tsb}
-                  size={64}
-                  weight={900}
-                  color={form.color}
-                  decimals={0}
-                  animate={true}
-                />
-              </div>
-              <div style={{ color: form.color, fontSize: 14, fontWeight: 700, marginTop: 2 }}>{form.label}</div>
-              <div style={{ color: NEON.textDim, fontSize: 11.5, marginTop: 3 }}>{form.desc}</div>
-            </div>
+          <div style={{ textAlign:'center', marginBottom: 8 }}>
+            <div style={{ color: NEON.textFaint, fontSize: 10, fontWeight: 700, letterSpacing: '0.16em', marginBottom: 4 }}>FORMA FISICA</div>
           </div>
-
-          {/* Form curve grafico */}
-          <FormCurve history={loadHistory} height={200}/>
-
-          {/* Legenda */}
-          <div style={{ display:'flex', justifyContent:'space-between', marginTop: 12, gap: 12 }}>
-            <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
-              <div style={{ width: 10, height: 2, background: NEON.teal, borderRadius: 1, boxShadow: `0 0 4px ${NEON.teal}` }}/>
-              <span style={{ color: NEON.textDim, fontSize: 10, fontWeight: 600 }}>Fitness {Math.round(last.ctl)}</span>
-            </div>
-            <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
-              <div style={{ width: 10, height: 2, background: NEON.orange, borderRadius: 1, boxShadow: `0 0 4px ${NEON.orange}` }}/>
-              <span style={{ color: NEON.textDim, fontSize: 10, fontWeight: 600 }}>Fatica {Math.round(last.atl)}</span>
-            </div>
-            <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
-              <div style={{ width: 10, height: 2, background: NEON.purple, borderRadius: 1, boxShadow: `0 0 4px ${NEON.purple}` }}/>
-              <span style={{ color: NEON.textDim, fontSize: 10, fontWeight: 600 }}>Forma {last.tsb >= 0 ? '+' : ''}{Math.round(last.tsb)}</span>
-            </div>
+          <FormDial tsb={last.tsb} ctl={last.ctl} atl={last.atl} size={220}/>
+          <div style={{ color: NEON.textDim, fontSize: 12, textAlign:'center', marginTop: 12, lineHeight: 1.45, padding:'0 8px' }}>
+            {form.desc}
           </div>
         </GlowCard>
       </div>
 
-      {/* Predizione gara */}
-      {prediction ? (
+      {/* Settimane di carico — barre, no linee */}
+      <div style={{ padding: '0 14px 14px' }}>
+        <SectionHeader kicker="ULTIME 8 SETTIMANE" title="Carico (TSS)" color={NEON.teal}/>
+        <GlowCard glow={NEON.teal} intensity={0.08}>
+          <WeeklyLoadBars history={loadHistory} weeks={8}/>
+        </GlowCard>
+      </div>
+
+      {/* Predizione gara — SOLO se abbiamo PB reali Strava */}
+      {prediction && (
         <div style={{ padding: '0 14px 14px' }}>
           <SectionHeader kicker="VDOT" title="Stima tempo gara" color={NEON.purple}/>
           <RacePredictionCard prediction={prediction} target={USER.raceTargetTime} raceName={USER.raceName}/>
-        </div>
-      ) : (
-        <div style={{ padding: '0 14px 14px' }}>
-          <SectionHeader kicker="VDOT" title="Stima tempo gara" color={NEON.purple}/>
-          <GlowCard glow={NEON.purple} intensity={0.08}>
-            <div style={{ color: NEON.text, fontSize: 13, fontWeight: 700 }}>Servono PB reali</div>
-            <div style={{ color: NEON.textDim, fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
-              Per stimare il tempo gara servono almeno una corsa registrata su 5K, 10K o 21K. Sincronizza più attività da Strava o lancia una corsa di test.
-            </div>
-          </GlowCard>
         </div>
       )}
 
