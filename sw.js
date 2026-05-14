@@ -1,6 +1,6 @@
 // Service Worker — RunCoach AI
 // Bump CACHE quando cambi la logica del SW o degli asset precachati
-const CACHE = 'runcoach-20260513a';
+const CACHE = 'runcoach-20260513b';
 const ASSETS = [
   './manifest.json',
   './icon-192.png',
