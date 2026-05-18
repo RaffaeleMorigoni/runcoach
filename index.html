@@ -107,6 +107,16 @@
 // Fallback globali: se i js non sono aggiornati su GitHub, evita crash
 window.recalibratePlan = window.recalibratePlan || function() { return null; };
 window.analyzeRun = window.analyzeRun || function() { return null; };
+window.generateWeekPlan = window.generateWeekPlan || function() { return []; };
+window.compareActualVsPlanned = window.compareActualVsPlanned || function() { return []; };
+window.activitiesToTrainingData = window.activitiesToTrainingData || function() { return []; };
+window.calculateTrainingLoad = window.calculateTrainingLoad || function() { return []; };
+window.computePBsFromActivities = window.computePBsFromActivities || function(_,fb) { return fb || null; };
+window.computeWeeklyAverage = window.computeWeeklyAverage || function() { return { avgKm: 0, avgRuns: 0, weeks: 0 }; };
+window.detectOvertraining = window.detectOvertraining || function() { return { flags: [], risk: 'unknown' }; };
+window.getFormLabel = window.getFormLabel || function() { return { label: 'Sconosciuta', color: '#888', desc: 'Dati non disponibili' }; };
+window.predictRaceTime = window.predictRaceTime || function() { return null; };
+window.generateTodayWorkout = window.generateTodayWorkout || function() { return { title: 'Corsa', detail: '', distance: 0, duration: 0, pace: '—', intensity: 'EASY' }; };
 // Componenti grafici nuovi — fallback se manca
 window.__FALLBACK_BOX__ = function(props) {
   return React.createElement('div', { style: { padding: 16, background: 'rgba(255,255,255,0.04)', borderRadius: 12, color: '#888', fontSize: 12, textAlign: 'center' }}, '— componente non disponibile —');
@@ -128,17 +138,17 @@ setTimeout(function() {
 }, 1500);
 </script>
 
-<script type="text/babel" src="js/shared.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260518e"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260518e"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260518f"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260518f"></script>
 
 <script type="text/babel">
 const { useState, useEffect } = React;
