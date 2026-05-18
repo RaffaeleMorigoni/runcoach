@@ -65,7 +65,7 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
       const raw = localStorage.getItem('rc_lastPlan');
       if (raw) lastPlan = JSON.parse(raw);
     } catch(e) {}
-    return recalibratePlan({
+    return window.recalibratePlan({
       activities,
       loadHistory,
       raceDateStr: USER.raceDateISO || USER.raceDate,
