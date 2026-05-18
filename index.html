@@ -138,17 +138,17 @@ setTimeout(function() {
 }, 1500);
 </script>
 
-<script type="text/babel" src="js/shared.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260518h"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260518i"></script>
 
 <script type="text/babel">
 const { useState, useEffect } = React;
@@ -708,9 +708,67 @@ function WorkoutResult({ workout, err, scheduleDate, setScheduleDate, onRegen, a
     } catch (e) { setSavedMsg('Errore salvataggio'); }
   };
 
+  const buildBackendPayload = () => {
+    const paceToMs = (str) => {
+      if (!str) return null;
+      const [m, s] = str.split(':').map(Number);
+      const sk = m*60 + (s||0);
+      return sk > 0 ? +(1000/sk).toFixed(4) : null;
+    };
+    const steps = [];
+    flat.forEach(s => {
+      let duration = 'OPEN';
+      if (s.duration_type === 'time' && s.duration_value) duration = `TIME:${s.duration_value}`;
+      else if (s.duration_type === 'distance' && s.duration_value) duration = `DISTANCE:${s.duration_value}`;
+      let tt = 'open', tlow = null, thigh = null;
+      if (s.target_type === 'pace' && s.pace_min && s.pace_max) {
+        tt = 'pace';
+        const a = paceToMs(s.pace_min), b = paceToMs(s.pace_max);
+        if (a && b) { tlow = Math.min(a,b); thigh = Math.max(a,b); }
+      } else if (s.target_type === 'hr' && s.hr_min && s.hr_max) {
+        tt = 'hr'; tlow = +s.hr_min; thigh = +s.hr_max;
+      }
+      steps.push({ type: s.phase || 'interval', duration, target_type: tt, target_low: tlow, target_high: thigh, note: s.desc || '' });
+    });
+    return {
+      name: (workout.title || 'AI Workout').slice(0, 60),
+      description: workout.rationale || '',
+      sport_type: 'running',
+      steps,
+      schedule_date: scheduleDate || null,
+    };
+  };
+
+  const [garminLoading, setGarminLoading] = useState(false);
+  const pushToGarmin = async () => {
+    const url = (localStorage.getItem('garmin_backend_url') || '').replace(/\/+$/, '');
+    if (!url) {
+      setSavedMsg('⚠ Backend Garmin non configurato. Vai in Allenamenti → Configura push diretto.');
+      return;
+    }
+    setGarminLoading(true); setSavedMsg(null);
+    try {
+      const res = await fetch(`${url}/upload-workout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildBackendPayload()),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data.detail;
+        const msg = typeof detail === 'string' ? detail : (detail?.message || `HTTP ${res.status}`);
+        throw new Error(msg);
+      }
+      setSavedMsg(data.scheduled
+        ? `✓ Inviato a Garmin Connect e schedulato per ${new Date(data.schedule_date).toLocaleDateString('it-IT', { weekday:'long', day:'numeric', month:'long' })}`
+        : '✓ Inviato a Garmin Connect (lo trovi in "I miei allenamenti")');
+    } catch (e) {
+      setSavedMsg('⚠ Push Garmin fallito: ' + (e.message || 'errore sconosciuto'));
+    }
+    setGarminLoading(false);
+  };
+
   return (
-    <div>
-      {err && <div style={{ background:'#3a1515', color:'#ff9a9a', padding:'8px 12px', borderRadius:8, fontSize:11, marginBottom:12 }}>⚠ {err}</div>}
 
       <div style={{ background:'rgba(255,255,255,0.04)', borderRadius:14, padding:14, marginBottom:12 }}>
         <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:10 }}>
@@ -760,7 +818,10 @@ function WorkoutResult({ workout, err, scheduleDate, setScheduleDate, onRegen, a
       {savedMsg && <div style={{ background:'rgba(0,207,168,0.1)', color:'#5fdca0', border:'1px solid rgba(0,207,168,0.3)', padding:'10px 12px', borderRadius:10, fontSize:12, marginBottom:10 }}>✓ {savedMsg}</div>}
 
       <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-        <button onClick={saveToPlan} style={{ flex:'1 1 100%', padding:'12px 0', background:'rgba(0,207,168,0.15)', border:'1px solid rgba(0,207,168,0.4)', borderRadius:12, color:'#00CFA8', fontWeight:700, fontSize:13, cursor:'pointer' }}>💾 Salva per questa data</button>
+        <button onClick={pushToGarmin} disabled={garminLoading} style={{ flex:'1 1 100%', padding:'14px 0', background: garminLoading ? '#444' : `linear-gradient(135deg, ${accent}, #C73015)`, border:'none', borderRadius:12, color:'#fff', fontWeight:800, fontSize:14, cursor: garminLoading ? 'wait' : 'pointer', letterSpacing:'0.04em', boxShadow: garminLoading ? 'none' : `0 6px 18px rgba(255,68,34,0.4)` }}>
+          {garminLoading ? '⌚ invio in corso…' : '⌚ INVIA A GARMIN CONNECT'}
+        </button>
+        <button onClick={saveToPlan} style={{ flex:'1 1 100%', padding:'12px 0', background:'rgba(0,207,168,0.15)', border:'1px solid rgba(0,207,168,0.4)', borderRadius:12, color:'#00CFA8', fontWeight:700, fontSize:13, cursor:'pointer' }}>💾 Salva nel piano locale</button>
         <button onClick={downloadTCX} style={{ flex:'1 1 48%', padding:'12px 0', background:'rgba(77,158,255,0.15)', border:'1px solid rgba(77,158,255,0.4)', borderRadius:12, color:'#4D9EFF', fontWeight:700, fontSize:12, cursor:'pointer' }}>⬇ Scarica .TCX</button>
         <button onClick={onRegen} style={{ flex:'1 1 48%', padding:'12px 0', background:'rgba(255,255,255,0.06)', border:'none', borderRadius:12, color:'#fff', fontWeight:600, fontSize:12, cursor:'pointer' }}>↺ Rigenera</button>
       </div>
