@@ -138,17 +138,17 @@ setTimeout(function() {
 }, 1500);
 </script>
 
-<script type="text/babel" src="js/shared.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260518g"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260518g"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260518h"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260518h"></script>
 
 <script type="text/babel">
 const { useState, useEffect } = React;
@@ -420,12 +420,59 @@ function App() {
 // ─── FAB: Genera allenamento AI ──────────────────────────────────────────────
 function WorkoutGeneratorFab({ tweaks }) {
   const [open, setOpen] = useState(false);
-  const [feel, setFeel] = useState(7); // 1-10
+  const [feel, setFeel] = useState(7);
   const [minutes, setMinutes] = useState(45);
   const [type, setType] = useState('auto');
   const [loading, setLoading] = useState(false);
   const [workout, setWorkout] = useState(null);
   const [err, setErr] = useState(null);
+  const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().slice(0,10));
+  const [state, setState] = useState(null); // stato runner: { ctl, atl, tsb, daysToRace, weeklyKm, recentRuns }
+
+  // Carica stato Strava + race al primo open
+  useEffect(() => {
+    if (!open || state) return;
+    (async () => {
+      const out = { ctl: 0, atl: 0, tsb: 0, daysToRace: null, weeklyKm: tweaks?.weeklyKm || 25, recentRuns: [] };
+      try {
+        // Race date
+        const iso = (typeof window.USER === 'object' && (window.USER.raceDateISO || window.USER.raceDate)) || tweaks?.raceDate;
+        if (iso && /^\d{4}-\d{2}-\d{2}/.test(iso)) {
+          const d = new Date(iso.slice(0,10) + 'T12:00:00');
+          out.daysToRace = Math.max(0, Math.ceil((d - new Date()) / 86400000));
+        }
+        // Strava
+        if (typeof window.getValidAuth === 'function' && typeof window.fetchActivities === 'function') {
+          const auth = await window.getValidAuth();
+          if (auth) {
+            const acts = await window.fetchActivities(auth, 60).catch(() => []);
+            if (Array.isArray(acts) && acts.length && typeof window.activitiesToTrainingData === 'function') {
+              const td = window.activitiesToTrainingData(acts);
+              if (typeof window.calculateTrainingLoad === 'function') {
+                const lh = window.calculateTrainingLoad(td, 60);
+                const last = lh[lh.length - 1] || {};
+                out.ctl = Math.round(+last.ctl || 0);
+                out.atl = Math.round(+last.atl || 0);
+                out.tsb = Math.round(+last.tsb || 0);
+              }
+              const now = Date.now();
+              const last28 = td.filter(a => (now - new Date(a.date).getTime()) <= 28*86400000);
+              if (last28.length) out.weeklyKm = +(last28.reduce((s,a) => s + (+a.distance_km||0), 0) / 4).toFixed(1);
+              out.recentRuns = td.slice(-5).reverse().map(a => {
+                const km = +a.distance_km || 0;
+                const paceSec = a.avg_pace_sec_km;
+                const pace = paceSec ? `${Math.floor(paceSec/60)}:${String(Math.round(paceSec%60)).padStart(2,'0')}/km` : '—';
+                const dt = new Date(a.date);
+                const dStr = isFinite(dt) ? `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}` : '—';
+                return `${dStr}: ${km.toFixed(1)}km @ ${pace}${a.avg_hr ? ' · ' + Math.round(a.avg_hr) + 'bpm' : ''}`;
+              });
+            }
+          }
+        }
+      } catch (e) {}
+      setState(out);
+    })();
+  }, [open]);
 
   const generate = async () => {
     setLoading(true); setErr(null); setWorkout(null);
@@ -433,28 +480,54 @@ function WorkoutGeneratorFab({ tweaks }) {
       const userName = tweaks?.userName || 'runner';
       const race = tweaks?.raceName || '';
       const target = tweaks?.raceTargetTime || '';
-      const weekly = tweaks?.weeklyKm || 25;
-      const typeLabel = { auto:'liberamente scelto', easy:'easy/recupero', tempo:'tempo/soglia', intervals:'intervalli/VO2', long:'lungo' }[type] || 'libero';
+      const targetPace = tweaks?.raceTargetPace || '';
+      const typeLabel = { auto:'lascia decidere a te', easy:'easy/recupero', tempo:'tempo/soglia', intervals:'intervalli/VO2', long:'lungo' }[type];
+      const s = state || { ctl:0, atl:0, tsb:0, daysToRace:null, weeklyKm: tweaks?.weeklyKm || 25, recentRuns: [] };
+      const formaLabel = s.tsb > 5 ? 'fresco' : s.tsb > -10 ? 'in equilibrio' : s.tsb > -20 ? 'affaticato' : 'sovraccarico';
+      // Random seed per evitare risposte identiche
+      const seed = Math.random().toString(36).slice(2, 8);
 
-      const system = `Sei un coach running. Genera UN allenamento personalizzato per ${userName} che corre ~${weekly}km/sett${race ? ', preparando ' + race + (target ? ' (target ' + target + ')' : '') : ''}.
-Sensazioni oggi: ${feel}/10 (10=ottime). Tempo disponibile: ${minutes} min. Tipo richiesto: ${typeLabel}.
+      const system = `Sei un coach running esperto. Genera UN allenamento personalizzato per ${userName} (volume ~${s.weeklyKm}km/sett).
 
-Rispondi SOLO con un blocco JSON tra \`\`\`workout e \`\`\`. Niente altro prima o dopo.
+CONTESTO ATLETA OGGI:
+- CTL ${s.ctl} · ATL ${s.atl} · TSB ${s.tsb >= 0 ? '+' : ''}${s.tsb} (forma: ${formaLabel})
+- Sensazioni dichiarate oggi: ${feel}/10 (10=ottime)
+- Tempo disponibile: ${minutes} min
+- Tipo richiesto: ${typeLabel}
+${race ? `- Gara obiettivo: ${race}${s.daysToRace != null ? ' (mancano ' + s.daysToRace + ' giorni)' : ''}${target ? ' — target ' + target + ' ' + targetPace : ''}` : ''}
+${s.recentRuns.length ? '\nULTIME CORSE:\n' + s.recentRuns.map(r => '- ' + r).join('\n') : ''}
+
+REGOLE:
+- Se TSB < -15: proponi recupero/easy, NIENTE qualità
+- Se mancano <= 7 giorni alla gara: solo attivazioni brevi, niente carichi
+- Se mancano 7-21 giorni: lavori specifici a passo gara permessi
+- Adatta i ritmi target ai pace VERI delle ultime corse — non inventare velocità che l'atleta non ha mai tenuto
+- Ogni allenamento DIVERSO dai precedenti (seed sessione: ${seed})
+
+FORMATO RISPOSTA: SOLO un blocco JSON tra \`\`\`workout e \`\`\`. Niente altro.
 
 \`\`\`workout
 {
-  "title": "Nome breve",
+  "title": "Nome breve (es. '5×1km a soglia')",
   "type": "easy|tempo|intervals|long|recovery",
   "distance_km": 8.5,
   "duration_min": 45,
-  "target_pace": "5:40/km",
   "rpe": "6/10",
-  "warmup":   { "duration": "10 min", "desc": "...", "pace": "6:30/km" },
-  "main_set": { "duration": "25 min", "desc": "...", "pace": "5:35/km" },
-  "cooldown": { "duration": "10 min", "desc": "...", "pace": "6:45/km" },
-  "note": "Perché questo allenamento oggi (1-2 frasi)"
+  "rationale": "1-2 frasi: perché OGGI, perché QUESTO, considerando CTL/TSB e giorni gara",
+  "garmin_steps": [
+    { "phase": "warmup",   "duration_type": "time",     "duration_value": 600,  "target_type": "pace", "pace_min": "6:30", "pace_max": "7:00", "desc": "Jogging lento + 4 allunghi 80m" },
+    { "phase": "interval", "duration_type": "distance", "duration_value": 1000, "target_type": "pace", "pace_min": "5:25", "pace_max": "5:35", "desc": "1km a ritmo soglia", "repeat": 5 },
+    { "phase": "recovery", "duration_type": "time",     "duration_value": 120,  "target_type": "none", "desc": "Recupero camminando o trotto" },
+    { "phase": "cooldown", "duration_type": "time",     "duration_value": 600,  "target_type": "pace", "pace_min": "6:30", "pace_max": "7:15", "desc": "Defaticamento" }
+  ]
 }
-\`\`\``;
+\`\`\`
+
+Note:
+- duration_type: "time" (secondi) o "distance" (metri) o "lap.button"
+- target_type: "pace" o "hr" o "none"
+- pace_min/max in "M:SS" /km
+- Se uno step si ripete (es. ripetute), aggiungi "repeat": N`;
 
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -465,38 +538,34 @@ Rispondi SOLO con un blocco JSON tra \`\`\`workout e \`\`\`. Niente altro prima 
       if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : `HTTP ${res.status}`);
 
       const reply = String(data.reply || '');
-      const m = reply.match(/```workout\s*([\s\S]*?)```/);
-      if (!m) {
-        // Tenta parse JSON puro
-        try { setWorkout(JSON.parse(reply)); }
-        catch { setWorkout({ title: 'Risposta AI', note: reply.slice(0, 500) }); }
-      } else {
-        try { setWorkout(JSON.parse(m[1].trim())); }
-        catch (e) { setErr('AI ha risposto ma JSON non valido. Riprova.'); }
+      const m = reply.match(/```(?:workout)?\s*([\s\S]*?)```/);
+      const raw = m ? m[1].trim() : reply.trim();
+      try {
+        const parsed = JSON.parse(raw);
+        // backfill compat: se manca garmin_steps, sintetizza dai vecchi warmup/main_set/cooldown
+        if (!parsed.garmin_steps && (parsed.warmup || parsed.main_set || parsed.cooldown)) {
+          parsed.garmin_steps = [];
+          ['warmup','main_set','cooldown'].forEach(k => {
+            if (parsed[k]) {
+              const phase = k === 'main_set' ? 'interval' : k;
+              parsed.garmin_steps.push({ phase, duration_type: 'time', duration_value: parseInt(parsed[k].duration) * 60 || 600, target_type: 'none', desc: parsed[k].desc });
+            }
+          });
+        }
+        setWorkout(parsed);
+      } catch (e) {
+        setErr('AI ha risposto ma JSON non valido. Riprova.');
       }
     } catch (e) {
-      // Fallback formula-based se AI fallisce
-      const easyPace = '6:00/km';
-      setWorkout({
-        title: `${type === 'long' ? 'Lungo' : 'Easy run'} ${Math.round(minutes/6)}km`,
-        type: type === 'auto' ? 'easy' : type,
-        distance_km: +(minutes/6).toFixed(1),
-        duration_min: minutes,
-        target_pace: easyPace,
-        rpe: feel < 6 ? '4/10' : '6/10',
-        note: 'Generato in modalità offline (AI non disponibile). Adatta il ritmo in base a come ti senti.',
-        warmup: { duration: '10 min', desc: 'Jogging facile + 4 allunghi', pace: '6:30/km' },
-        main_set: { duration: `${minutes - 20} min`, desc: 'Corsa continua', pace: easyPace },
-        cooldown: { duration: '10 min', desc: 'Defaticamento', pace: '6:45/km' },
-      });
-      setErr('AI offline — fallback formula');
+      // Fallback formula
+      setWorkout(formulaFallback(type, minutes, feel, state));
+      setErr('AI offline — workout fallback formula');
     }
     setLoading(false);
   };
 
   const accent = '#FF4422';
 
-  // FAB chiuso
   if (!open) {
     return (
       <button onClick={() => setOpen(true)} style={{
@@ -510,25 +579,33 @@ Rispondi SOLO con un blocco JSON tra \`\`\`workout e \`\`\`. Niente altro prima 
     );
   }
 
-  // Modal
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'flex-end', backdropFilter:'blur(4px)' }} onClick={() => !loading && setOpen(false)}>
       <div onClick={e => e.stopPropagation()} style={{
-        width:'100%', maxHeight:'90vh', overflowY:'auto',
+        width:'100%', maxHeight:'92vh', overflowY:'auto',
         background:'#0d0d18', borderTopLeftRadius: 22, borderTopRightRadius: 22,
-        padding: '18px 18px 28px', border:'1px solid rgba(255,255,255,0.08)',
+        padding: '14px 18px 28px', border:'1px solid rgba(255,255,255,0.08)',
       }}>
         <div style={{ width:40, height:4, background:'rgba(255,255,255,0.18)', borderRadius:2, margin:'0 auto 14px' }}/>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
           <div>
             <div style={{ color: accent, fontSize: 10, fontWeight: 800, letterSpacing: '0.16em' }}>✨ AI WORKOUT</div>
-            <div style={{ color:'#fff', fontSize: 19, fontWeight: 800, marginTop: 2 }}>Genera allenamento</div>
+            <div style={{ color:'#fff', fontSize: 19, fontWeight: 800, marginTop: 2 }}>{workout ? workout.title : 'Genera allenamento'}</div>
           </div>
-          <button onClick={() => setOpen(false)} disabled={loading} style={{ background:'rgba(255,255,255,0.05)', border:'none', color:'#fff', width:32, height:32, borderRadius:16, fontSize:14, cursor:'pointer' }}>✕</button>
+          <button onClick={() => { if(!loading){ setOpen(false); setWorkout(null); }}} disabled={loading} style={{ background:'rgba(255,255,255,0.05)', border:'none', color:'#fff', width:32, height:32, borderRadius:16, fontSize:14, cursor:'pointer' }}>✕</button>
         </div>
 
         {!workout && (
           <div>
+            {state && (
+              <div style={{ background:'rgba(255,68,34,0.08)', border:'1px solid rgba(255,68,34,0.25)', borderRadius:10, padding:'10px 12px', marginBottom:14, fontSize:11, color:'#ddd' }}>
+                <div style={{ color: accent, fontWeight:800, fontSize:10, letterSpacing:'0.1em', marginBottom:4 }}>STATO ATTUALE</div>
+                CTL <b style={{color:'#fff'}}>{state.ctl}</b> · ATL <b style={{color:'#fff'}}>{state.atl}</b> · TSB <b style={{color:'#fff'}}>{state.tsb >= 0 ? '+' : ''}{state.tsb}</b>
+                {state.daysToRace != null && <> · <b style={{color:'#fff'}}>{state.daysToRace}gg</b> alla gara</>}
+                {' · '}~<b style={{color:'#fff'}}>{state.weeklyKm}</b>km/sett
+              </div>
+            )}
+
             <div style={{ marginBottom: 14 }}>
               <div style={{ color:'#aaa', fontSize:11, fontWeight:700, letterSpacing:'0.08em', marginBottom: 8 }}>COME TI SENTI? {feel}/10</div>
               <input type="range" min={1} max={10} value={feel} onChange={e => setFeel(+e.target.value)} style={{ width:'100%', accentColor: accent }}/>
@@ -553,13 +630,7 @@ Rispondi SOLO con un blocco JSON tra \`\`\`workout e \`\`\`. Niente altro prima 
             <div style={{ marginBottom: 18 }}>
               <div style={{ color:'#aaa', fontSize:11, fontWeight:700, letterSpacing:'0.08em', marginBottom: 8 }}>TIPO</div>
               <div style={{ display:'flex', gap: 6, flexWrap:'wrap' }}>
-                {[
-                  ['auto','Decide il coach','🤖'],
-                  ['easy','Easy','🟢'],
-                  ['tempo','Tempo','🟡'],
-                  ['intervals','Intervalli','🔴'],
-                  ['long','Lungo','🔵'],
-                ].map(([k, l, e]) => (
+                {[['auto','Decide il coach','🤖'],['easy','Easy','🟢'],['tempo','Tempo','🟡'],['intervals','Intervalli','🔴'],['long','Lungo','🔵']].map(([k, l, e]) => (
                   <button key={k} onClick={() => setType(k)} style={{
                     flex:'1 1 28%', padding:'10px 6px',
                     border: k===type ? `1.5px solid ${accent}` : '1px solid rgba(255,255,255,0.1)',
@@ -579,38 +650,173 @@ Rispondi SOLO con un blocco JSON tra \`\`\`workout e \`\`\`. Niente altro prima 
           </div>
         )}
 
-        {workout && (
-          <div>
-            {err && <div style={{ background:'#3a1515', color:'#ff9a9a', padding:'8px 12px', borderRadius:8, fontSize:11, marginBottom:12 }}>⚠ {err}</div>}
-            <div style={{ background:'rgba(255,255,255,0.04)', borderRadius:14, padding:14, marginBottom:12 }}>
-              <div style={{ color: accent, fontSize:10, fontWeight:800, letterSpacing:'0.12em', marginBottom:4 }}>{(workout.type||'').toUpperCase()}</div>
-              <div style={{ color:'#fff', fontSize:18, fontWeight:800, marginBottom:8 }}>{workout.title}</div>
-              <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:10 }}>
-                {workout.distance_km != null && <span style={{ background:'rgba(255,255,255,0.06)', color:'#fff', fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:6 }}>{workout.distance_km} km</span>}
-                {workout.duration_min != null && <span style={{ background:'rgba(255,255,255,0.06)', color:'#fff', fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:6 }}>{workout.duration_min} min</span>}
-                {workout.target_pace && <span style={{ background:`${accent}22`, color: accent, fontSize:11, fontWeight:800, padding:'4px 10px', borderRadius:6 }}>{workout.target_pace}</span>}
-                {workout.rpe && <span style={{ background:'rgba(255,255,255,0.06)', color:'#aaa', fontSize:11, padding:'4px 10px', borderRadius:6 }}>RPE {workout.rpe}</span>}
-              </div>
-              {['warmup','main_set','cooldown'].map(k => workout[k] && (
-                <div key={k} style={{ borderLeft:`2px solid ${k==='main_set'?accent:'#00CFA8'}`, paddingLeft:10, marginBottom:8 }}>
-                  <div style={{ color:'#fff', fontSize:11, fontWeight:800, textTransform:'uppercase', letterSpacing:'0.05em' }}>
-                    {k==='warmup'?'Riscaldamento':k==='main_set'?'Principale':'Defaticamento'} · {workout[k].duration}
-                  </div>
-                  <div style={{ color:'#aaa', fontSize:11, marginTop:2 }}>{workout[k].desc}</div>
-                  {workout[k].pace && <div style={{ color:'#777', fontSize:10, marginTop:1 }}>{workout[k].pace}</div>}
-                </div>
-              ))}
-              {workout.note && <div style={{ color:'#999', fontSize:11, fontStyle:'italic', marginTop:6, lineHeight:1.45 }}>💡 {workout.note}</div>}
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <button onClick={() => setWorkout(null)} style={{ flex:1, padding:'12px 0', background:'rgba(255,255,255,0.06)', border:'none', borderRadius:12, color:'#fff', fontWeight:600, fontSize:13, cursor:'pointer' }}>↺ Rigenera</button>
-              <button onClick={() => setOpen(false)} style={{ flex:1, padding:'12px 0', background: accent, border:'none', borderRadius:12, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>✓ Fatto</button>
-            </div>
-          </div>
-        )}
+        {workout && <WorkoutResult workout={workout} err={err} scheduleDate={scheduleDate} setScheduleDate={setScheduleDate} onRegen={() => setWorkout(null)} accent={accent}/>}
       </div>
     </div>
   );
+}
+
+// ─── Risultato workout: visualizza Garmin-style + azioni ────────────────────
+function WorkoutResult({ workout, err, scheduleDate, setScheduleDate, onRegen, accent }) {
+  const [savedMsg, setSavedMsg] = useState(null);
+  const steps = workout.garmin_steps || [];
+
+  const expandSteps = () => {
+    const out = [];
+    steps.forEach((s, i) => {
+      const rep = s.repeat || 1;
+      for (let r = 0; r < rep; r++) {
+        out.push({ ...s, idx: out.length + 1, repNum: rep > 1 ? r + 1 : null, repTotal: rep > 1 ? rep : null });
+      }
+    });
+    return out;
+  };
+  const flat = expandSteps();
+
+  const buildTcx = () => {
+    const stepsXml = flat.map((s, i) => {
+      const durType = s.duration_type === 'time' ? 'Time_t' : 'Distance_t';
+      const durTag  = s.duration_type === 'time'
+        ? `<Seconds>${s.duration_value}</Seconds>`
+        : `<Meters>${s.duration_value}</Meters>`;
+      const intensity = s.phase === 'warmup' ? 'Warmup' : s.phase === 'cooldown' ? 'Cooldown' : s.phase === 'recovery' ? 'Rest' : 'Active';
+      let target = '<Target xsi:type="None_t"/>';
+      if (s.target_type === 'pace' && s.pace_min && s.pace_max) {
+        const toMs = (str) => { const [m, sec] = str.split(':').map(Number); const sk = m*60+(sec||0); return sk > 0 ? 1000/sk : 0; };
+        const hi = toMs(s.pace_min), lo = toMs(s.pace_max);
+        target = `<Target xsi:type="Speed_t"><SpeedZone xsi:type="CustomSpeedZone_t"><LowInMetersPerSecond>${Math.min(lo,hi).toFixed(4)}</LowInMetersPerSecond><HighInMetersPerSecond>${Math.max(lo,hi).toFixed(4)}</HighInMetersPerSecond></SpeedZone></Target>`;
+      }
+      return `<Step xsi:type="Step_t"><StepId>${i+1}</StepId><Name>${(s.desc||'Step').replace(/[<>&]/g,'')}</Name><Duration xsi:type="${durType}">${durTag}</Duration><Intensity>${intensity}</Intensity>${target}</Step>`;
+    }).join('');
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><Workouts><Workout Sport="Running"><Name>${(workout.title||'Workout').replace(/[<>&]/g,'').slice(0,15)}</Name>${stepsXml}</Workout></Workouts></TrainingCenterDatabase>`;
+  };
+
+  const downloadTCX = () => {
+    const blob = new Blob([buildTcx()], { type:'application/vnd.garmin.tcx+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = (workout.title||'workout').replace(/\s+/g,'_') + '.tcx'; a.click();
+    URL.revokeObjectURL(url);
+    setSavedMsg('File .tcx scaricato — importalo su Garmin Connect → Allenamenti → Importa');
+  };
+
+  const saveToPlan = () => {
+    try {
+      const plan = JSON.parse(localStorage.getItem('rc_userPlan') || '{}');
+      plan[scheduleDate] = { ...workout, savedAt: new Date().toISOString() };
+      localStorage.setItem('rc_userPlan', JSON.stringify(plan));
+      setSavedMsg(`Salvato per ${new Date(scheduleDate).toLocaleDateString('it-IT', { weekday:'long', day:'numeric', month:'long' })}`);
+    } catch (e) { setSavedMsg('Errore salvataggio'); }
+  };
+
+  return (
+    <div>
+      {err && <div style={{ background:'#3a1515', color:'#ff9a9a', padding:'8px 12px', borderRadius:8, fontSize:11, marginBottom:12 }}>⚠ {err}</div>}
+
+      <div style={{ background:'rgba(255,255,255,0.04)', borderRadius:14, padding:14, marginBottom:12 }}>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:10 }}>
+          {workout.type && <span style={{ background: `${accent}22`, color: accent, fontSize:10, fontWeight:800, padding:'4px 10px', borderRadius:6, letterSpacing:'0.06em' }}>{workout.type.toUpperCase()}</span>}
+          {workout.distance_km != null && <span style={{ background:'rgba(255,255,255,0.06)', color:'#fff', fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:6 }}>{workout.distance_km} km</span>}
+          {workout.duration_min != null && <span style={{ background:'rgba(255,255,255,0.06)', color:'#fff', fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:6 }}>{workout.duration_min} min</span>}
+          {workout.rpe && <span style={{ background:'rgba(255,255,255,0.06)', color:'#aaa', fontSize:11, padding:'4px 10px', borderRadius:6 }}>RPE {workout.rpe}</span>}
+        </div>
+        {workout.rationale && <div style={{ color:'#bbb', fontSize:12, lineHeight:1.5, fontStyle:'italic', marginBottom:10, padding:'8px 10px', background:'rgba(255,68,34,0.06)', borderLeft:`2px solid ${accent}`, borderRadius:4 }}>{workout.rationale}</div>}
+
+        {flat.length > 0 && (
+          <div style={{ marginTop:8 }}>
+            <div style={{ color:'#888', fontSize:10, fontWeight:700, letterSpacing:'0.08em', marginBottom:6 }}>GARMIN WORKOUT</div>
+            {flat.map((s, i) => {
+              const phaseColors = { warmup:'#00CFA8', interval: accent, recovery:'#4D9EFF', cooldown:'#00CFA8' };
+              const col = phaseColors[s.phase] || '#888';
+              const durStr = s.duration_type === 'time'
+                ? `${Math.round(s.duration_value/60*10)/10} min`
+                : s.duration_type === 'distance' ? `${(s.duration_value/1000).toFixed(2)} km` : 'lap';
+              return (
+                <div key={i} style={{ display:'flex', gap:8, padding:'6px 0', borderBottom: i < flat.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                  <div style={{ width:24, height:24, background:`${col}22`, color:col, borderRadius:6, fontSize:11, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{i+1}</div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ display:'flex', alignItems:'baseline', gap:6, marginBottom:2 }}>
+                      <span style={{ color: col, fontSize:10, fontWeight:800, textTransform:'uppercase', letterSpacing:'0.05em' }}>{s.phase}</span>
+                      <span style={{ color:'#fff', fontSize:12, fontWeight:700 }}>{durStr}</span>
+                      {s.target_type === 'pace' && s.pace_min && <span style={{ color: col, fontSize:11, fontWeight:700, marginLeft:'auto' }}>{s.pace_min}-{s.pace_max}/km</span>}
+                      {s.target_type === 'hr' && s.hr_min && <span style={{ color: col, fontSize:11, fontWeight:700, marginLeft:'auto' }}>{s.hr_min}-{s.hr_max} bpm</span>}
+                      {s.repNum && <span style={{ color:'#888', fontSize:10 }}>({s.repNum}/{s.repTotal})</span>}
+                    </div>
+                    {s.desc && <div style={{ color:'#999', fontSize:11, lineHeight:1.4 }}>{s.desc}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Schedule date */}
+      <div style={{ background:'rgba(255,255,255,0.03)', borderRadius:12, padding:12, marginBottom:10 }}>
+        <div style={{ color:'#888', fontSize:10, fontWeight:700, letterSpacing:'0.08em', marginBottom:6 }}>ASSEGNA A UNA DATA</div>
+        <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)}
+          style={{ width:'100%', height:42, padding:'0 12px', background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:10, color:'#fff', fontSize:13, outline:'none', colorScheme:'dark' }}/>
+      </div>
+
+      {savedMsg && <div style={{ background:'rgba(0,207,168,0.1)', color:'#5fdca0', border:'1px solid rgba(0,207,168,0.3)', padding:'10px 12px', borderRadius:10, fontSize:12, marginBottom:10 }}>✓ {savedMsg}</div>}
+
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+        <button onClick={saveToPlan} style={{ flex:'1 1 100%', padding:'12px 0', background:'rgba(0,207,168,0.15)', border:'1px solid rgba(0,207,168,0.4)', borderRadius:12, color:'#00CFA8', fontWeight:700, fontSize:13, cursor:'pointer' }}>💾 Salva per questa data</button>
+        <button onClick={downloadTCX} style={{ flex:'1 1 48%', padding:'12px 0', background:'rgba(77,158,255,0.15)', border:'1px solid rgba(77,158,255,0.4)', borderRadius:12, color:'#4D9EFF', fontWeight:700, fontSize:12, cursor:'pointer' }}>⬇ Scarica .TCX</button>
+        <button onClick={onRegen} style={{ flex:'1 1 48%', padding:'12px 0', background:'rgba(255,255,255,0.06)', border:'none', borderRadius:12, color:'#fff', fontWeight:600, fontSize:12, cursor:'pointer' }}>↺ Rigenera</button>
+      </div>
+    </div>
+  );
+}
+
+// Fallback formula se AI fallisce
+function formulaFallback(type, minutes, feel, state) {
+  const tsb = state?.tsb || 0;
+  const daysToRace = state?.daysToRace;
+  // Forza easy se TSB basso o gara imminente
+  if (tsb < -15 || (daysToRace !== null && daysToRace !== undefined && daysToRace <= 5)) type = 'easy';
+  const km = Math.round(minutes / 6 * 10) / 10;
+  const easyPace = '6:00';
+  const tempoPace = '5:30';
+  const intervalPace = '4:50';
+
+  const presets = {
+    easy: {
+      title: `Easy ${km}km`, type:'easy',
+      garmin_steps: [
+        { phase:'warmup',   duration_type:'time', duration_value:300, target_type:'pace', pace_min:'6:30', pace_max:'7:00', desc:'Camminata + jogging' },
+        { phase:'interval', duration_type:'time', duration_value:(minutes-10)*60, target_type:'pace', pace_min:'5:50', pace_max:'6:20', desc:'Corsa easy continua' },
+        { phase:'cooldown', duration_type:'time', duration_value:300, target_type:'none', desc:'Defaticamento' },
+      ],
+    },
+    tempo: {
+      title:'Tempo run', type:'tempo',
+      garmin_steps: [
+        { phase:'warmup',   duration_type:'time', duration_value:720, target_type:'pace', pace_min:'6:30', pace_max:'7:00', desc:'Riscaldamento + 4 allunghi' },
+        { phase:'interval', duration_type:'time', duration_value:(minutes-25)*60, target_type:'pace', pace_min:'5:20', pace_max:'5:35', desc:'Blocco a soglia' },
+        { phase:'cooldown', duration_type:'time', duration_value:600, target_type:'pace', pace_min:'6:30', pace_max:'7:00', desc:'Defaticamento' },
+      ],
+    },
+    intervals: {
+      title:'5×1km VO2', type:'intervals',
+      garmin_steps: [
+        { phase:'warmup',   duration_type:'time', duration_value:900, target_type:'pace', pace_min:'6:30', pace_max:'7:00', desc:'Riscaldamento + allunghi' },
+        { phase:'interval', duration_type:'distance', duration_value:1000, target_type:'pace', pace_min:'4:45', pace_max:'4:55', desc:'1km veloce', repeat:5 },
+        { phase:'recovery', duration_type:'time', duration_value:120, target_type:'none', desc:'Jogging recupero', repeat:5 },
+        { phase:'cooldown', duration_type:'time', duration_value:600, target_type:'pace', pace_min:'6:30', pace_max:'7:00', desc:'Defaticamento' },
+      ],
+    },
+    long: {
+      title:`Lungo ${Math.round(km*1.3)}km`, type:'long',
+      garmin_steps: [
+        { phase:'warmup',   duration_type:'time', duration_value:600, target_type:'pace', pace_min:'6:30', pace_max:'7:00', desc:'Avvio progressivo' },
+        { phase:'interval', duration_type:'time', duration_value:(minutes-15)*60, target_type:'pace', pace_min:'5:50', pace_max:'6:20', desc:'Lungo continuo a passo conversazionale' },
+        { phase:'cooldown', duration_type:'time', duration_value:300, target_type:'none', desc:'Cammino + stretching' },
+      ],
+    },
+  };
+  if (type === 'auto') type = tsb < -10 ? 'easy' : 'tempo';
+  const pick = presets[type] || presets.easy;
+  return { ...pick, distance_km: km, duration_min: minutes, rpe: feel < 6 ? '5/10' : '7/10', rationale: 'Workout fallback (AI non disponibile). Ritmi orientativi.' };
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
