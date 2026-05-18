@@ -14,10 +14,9 @@
   <link rel="apple-touch-icon" href="icon-192.png">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Caveat:wght@500;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
@@ -45,48 +44,24 @@
     input::placeholder { color: rgba(238,238,248,0.3); }
     button { -webkit-appearance: none; }
 
-    /* Tipografie running-club */
-    .font-script { font-family: 'Caveat', cursive; }
-    .font-display { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.02em; }
-
     /* Splash screen */
     #splash {
       position: fixed; inset: 0;
-      background: radial-gradient(ellipse at 30% 30%, #1a0a08 0%, #06060E 70%);
+      background: #06060E;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      gap: 4px; z-index: 999;
+      gap: 16px; z-index: 999;
       transition: opacity 0.4s ease;
-      overflow: hidden;
-    }
-    #splash::before {
-      content: ''; position: absolute; inset: 0;
-      background:
-        radial-gradient(circle at 70% 80%, rgba(255,68,34,0.18), transparent 50%),
-        radial-gradient(circle at 20% 90%, rgba(255,68,34,0.10), transparent 40%);
-      pointer-events: none;
     }
     #splash.hidden { opacity: 0; pointer-events: none; }
-    .splash-script {
-      font-family: 'Caveat', cursive;
-      color: #EEEEF8; font-size: 84px; font-weight: 700;
-      letter-spacing: -1px; line-height: 0.85;
-      position: relative; z-index: 1;
-      text-shadow: 0 0 24px rgba(255,68,34,0.35);
+    .splash-icon {
+      width: 80px; height: 80px; border-radius: 22px;
+      background: linear-gradient(135deg, #12122A, #06060E);
+      border: 1px solid rgba(255,68,34,0.3);
+      display: flex; align-items: center; justify-content: center;
     }
-    .splash-script .accent { color: #FF4422; }
-    .splash-label {
-      font-family: 'Bebas Neue', sans-serif;
-      color: rgba(238,238,248,0.55); font-size: 12px;
-      letter-spacing: 0.6em; margin-top: 14px;
-      position: relative; z-index: 1;
-    }
-    .splash-rule {
-      width: 60px; height: 2px; background: #FF4422;
-      box-shadow: 0 0 8px #FF4422;
-      margin-top: 16px; position: relative; z-index: 1;
-    }
-    .splash-sub { color: rgba(238,238,248,0.4); font-size: 12px; margin-top: 18px; position: relative; z-index: 1; }
+    .splash-title { color: #EEEEF8; font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
+    .splash-sub   { color: rgba(238,238,248,0.45); font-size: 13px; }
 
     /* SW install banner */
     #install-banner {
@@ -104,9 +79,13 @@
 
 <!-- Splash -->
 <div id="splash">
-  <div class="splash-script">Run<span class="accent">.</span>Coach</div>
-  <div class="splash-rule"></div>
-  <div class="splash-label">PER CHI CORRE DAVVERO</div>
+  <div class="splash-icon">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+      <path d="M13 4C13 5.1 13.9 6 15 6C16.1 6 17 5.1 17 4C17 2.9 16.1 2 15 2C13.9 2 13 2.9 13 4Z" fill="#FF4422"/>
+      <path d="M5.5 18.5L8 13L11 16L13 10L16.5 18.5" stroke="#FF4422" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  </div>
+  <div class="splash-title">RunCoach AI</div>
   <div class="splash-sub">Caricamento in corso…</div>
 </div>
 
@@ -124,35 +103,17 @@
   <button id="dismiss-btn" style="background:none;border:none;color:rgba(238,238,248,0.4);font-size:18px;cursor:pointer;padding:4px">✕</button>
 </div>
 
-<script type="text/babel" src="js/shared.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260513b"></script>
-<script>
-// Carica config Garmin (client_id pubblico) prima di garmin-auth.jsx
-(async () => {
-  try {
-    const r = await fetch('/api/garmin/config');
-    if (r.ok) {
-      const cfg = await r.json();
-      window.GARMIN_CLIENT_ID = cfg.client_id || '';
-      window.GARMIN_REDIRECT_URI = cfg.redirect_uri || '';
-    }
-  } catch(e) { /* offline / endpoint non disponibile in locale */ }
-})();
-</script>
-<script type="text/babel" src="js/garmin-auth.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/garmin-service.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/garmin-login-button.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/workout-picker.jsx?v=20260513b"></script>
-<script type="text/babel" src="js/run-diary.jsx?v=20260513b"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260518-stable"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260518-stable"></script>
 
 <script type="text/babel">
 const { useState, useEffect } = React;
@@ -180,8 +141,7 @@ function MobileBottomNav({ current, onChange }) {
     { id:'plan',     label:'Piano',     icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="17" rx="3" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" fill={a?`${accent}22`:'none'}/><path d="M3 9H21" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75"/><path d="M8 2V6M16 2V6" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/><path d="M7 14H9M11 14H13M15 14H17M7 17H9M11 17H13" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/></svg> },
     { id:'coach',    label:'Coach',     icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 5.92 2 10.8C2 13.76 3.56 16.4 6 18.08V22L9.6 19.6C10.36 19.84 11.16 20 12 20C17.52 20 22 16.08 22 10.8S17.52 2 12 2Z" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" fill={a?`${accent}22`:'none'}/><circle cx="8" cy="11" r="1.2" fill={a?accent:'rgba(238,238,248,0.3)'}/><circle cx="12" cy="11" r="1.2" fill={a?accent:'rgba(238,238,248,0.3)'}/><circle cx="16" cy="11" r="1.2" fill={a?accent:'rgba(238,238,248,0.3)'}/></svg> },
     { id:'progress', label:'Progressi', icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 17L8 11L13 14L19 6" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/><path d="M20 6H15M20 6V11" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/></svg> },
-    { id:'workouts', label:'Workout',   icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 4v16M18 4v16M3 8h18M3 16h18" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/><circle cx="12" cy="12" r="2.5" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" fill={a?`${accent}22`:'none'}/></svg> },
-    { id:'diary',    label:'Diario',    icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M5 4h11l3 3v13a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" fill={a?`${accent}22`:'none'}/><path d="M8 11h8M8 15h6M8 7h6" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinecap="round"/></svg> },
+    { id:'garmin',   label:'Garmin',    icon: (a) => <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke={a?accent:'rgba(238,238,248,0.3)'} strokeWidth="1.75" strokeLinejoin="round"/></svg> },
   ];
 
   return (
@@ -254,30 +214,6 @@ function TweaksPanel({ tweaks, onChange }) {
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
-// ─── ErrorBoundary: cattura crash di sottoalbero ─────────────────────────────
-class ErrorBoundary extends React.Component {
-  constructor(p) { super(p); this.state = { err: null }; }
-  componentDidCatch(err, info) { this.setState({ err, info }); console.error('UI crash:', err, info); }
-  render() {
-    if (this.state.err) {
-      return (
-        <div style={{ padding:'24px 18px', color:'#fff', overflow:'auto', minHeight:'100%' }}>
-          <div style={{ color:'#FF4422', fontSize:13, fontWeight:700, letterSpacing:'0.16em', marginBottom:10 }}>OPS · CRASH UI</div>
-          <div style={{ color:'#FFD24E', fontSize:14, fontWeight:600, marginBottom:8, wordBreak:'break-word' }}>{this.state.err.message || String(this.state.err)}</div>
-          <pre style={{ color:'#ccc', fontSize:11, whiteSpace:'pre-wrap', wordBreak:'break-word', background:'rgba(255,255,255,0.04)', padding:12, borderRadius:8, lineHeight:1.45 }}>
-            {this.state.err.stack || ''}
-            {'\n\n— Componente —\n' + (this.state.info?.componentStack || '')}
-          </pre>
-          <button onClick={() => { localStorage.clear(); location.reload(); }} style={{ marginTop:14, padding:'10px 16px', background:'#FF4422', color:'#fff', border:'none', borderRadius:10, fontSize:13, fontWeight:700, cursor:'pointer' }}>
-            Reset app + reload
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 function App() {
   const saved = (() => { try { return JSON.parse(localStorage.getItem('rca_mobile') || '{}'); } catch { return {}; } })();
   const [screen, setScreen]           = useState(saved.screen || 'home');
@@ -295,13 +231,11 @@ function App() {
   }, [screen, tweaks]);
 
   useEffect(() => {
-    // Hide splash quando React ha effettivamente renderizzato qualcosa
-    const hide = () => {
+    // Hide splash
+    setTimeout(() => {
       const s = document.getElementById('splash');
       if (s) s.classList.add('hidden');
-    };
-    // Almeno 300ms di splash per evitare flash, poi nascondi
-    setTimeout(hide, 300);
+    }, 700);
 
     // Tweaks protocol
     const handler = (e) => {
@@ -320,22 +254,10 @@ function App() {
       return () => window.removeEventListener('message', handler);
     }
 
-    // Check stored auth con timeout di sicurezza (max 4s, poi forza login)
-    let resolved = false;
-    const fallback = setTimeout(() => {
-      if (!resolved) { resolved = true; setAuthState('login'); }
-    }, 4000);
+    // Check stored auth
     getValidAuth().then(auth => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(fallback);
       if (auth) { setStravaAuth(auth); setAuthState('authenticated'); }
       else       { setAuthState('login'); }
-    }).catch(() => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(fallback);
-      setAuthState('login');
     });
 
     return () => window.removeEventListener('message', handler);
@@ -365,12 +287,8 @@ function App() {
   // Auth screens (no bottom nav)
   if (authState === 'checking') {
     return (
-      <div style={{ height:'100%', background:'#06060E', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, padding:20 }}>
-        <div style={{ width:36, height:36, borderRadius:18, border:'3px solid #FF4422', borderTopColor:'transparent', animation:'spin 0.8s linear infinite' }}/>
-        <div style={{ color:'#fff', fontSize:14, fontWeight:600 }}>Verifico accesso…</div>
-        <button onClick={() => setAuthState('login')} style={{ marginTop:8, padding:'8px 14px', background:'transparent', border:'1px solid rgba(255,255,255,0.2)', borderRadius:10, color:'rgba(255,255,255,0.7)', fontSize:12, cursor:'pointer' }}>
-          Login manuale
-        </button>
+      <div style={{ height:'100%', background:'#06060E', display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{ width:40, height:40, borderRadius:20, border:'3px solid #FC4C02', borderTopColor:'transparent', animation:'spin 0.8s linear infinite' }}/>
         <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
@@ -404,17 +322,13 @@ function App() {
   const renderScreen = () => {
     switch (screen) {
       case 'home':     return <HomeV2 auth={stravaAuth} onNav={navTo} tweaks={tweaks} onLogout={handleLogout} />;
-      case 'workouts': return <WorkoutPickerScreen tweaks={tweaks} auth={stravaAuth} onBack={() => setScreen('home')} onSelectWorkout={(w) => { setWorkoutData(w); setScreen('workout'); }} />;
-      case 'plan':     return <PlanSelectorScreen tweaks={tweaks} onBack={() => setScreen('home')} onSelectPlan={(plan) => { handleTweakChange('selectedPlan', plan.id); setScreen('home'); }} />;
-      case 'plan-old': return <PlanScreenM     onNav={navTo} tweaks={tweaks} />;
-      case 'workout':  return <WorkoutDetailScreen workout={workoutData} tweaks={tweaks} onBack={() => setScreen('workouts')} onStart={(w) => { setWorkoutData(w); setScreen('garmin'); }} />;
+      case 'plan':     return <PlanScreenM     onNav={navTo} tweaks={tweaks} />;
+      case 'workout':  return <WorkoutScreenM  workout={workoutData || TODAY_WORKOUT} onBack={() => setScreen('home')} tweaks={tweaks} />;
       case 'coach':    return <CoachScreenM    tweaks={tweaks} onNav={navTo} auth={stravaAuth} />;
       case 'progress': return <ProgressV2     tweaks={tweaks} />;
       case 'recovery': return <RecoveryScreenM tweaks={tweaks} />;
-      case 'garmin':   return <GarminBuilderScreen onBack={() => setScreen('home')} tweaks={tweaks} workout={workoutData} />;
+      case 'garmin':   return <GarminBuilderScreen onBack={() => setScreen('home')} tweaks={tweaks} />;
       case 'race-settings': return <RaceSettingsScreenM tweaks={tweaks} onChange={handleTweakChange} onBack={() => setScreen('coach')} />;
-      case 'diary':   return <RunDiaryScreen tweaks={tweaks} onNav={navTo} onOpenRun={(id) => { setWorkoutData({ runId: id }); setScreen('run-detail'); }} />;
-      case 'run-detail': return <RunDetailScreen runId={workoutData?.runId} tweaks={tweaks} onNav={navTo} />;
       default:         return <HomeV2 auth={stravaAuth} onNav={navTo} tweaks={tweaks} onLogout={handleLogout} />;
     }
   };
@@ -430,7 +344,7 @@ function App() {
       </div>
 
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', zIndex:1 }}>
-        <ErrorBoundary>{renderScreen()}</ErrorBoundary>
+        {renderScreen()}
       </div>
 
       {showNav && (
