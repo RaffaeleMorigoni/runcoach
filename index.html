@@ -103,17 +103,23 @@
   <button id="dismiss-btn" style="background:none;border:none;color:rgba(238,238,248,0.4);font-size:18px;cursor:pointer;padding:4px">✕</button>
 </div>
 
-<script type="text/babel" src="js/shared.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260518c"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260518c"></script>
+<script>
+// Fallback globali: se i js non sono aggiornati su GitHub, evita crash
+window.recalibratePlan = window.recalibratePlan || function() { return null; };
+window.analyzeRun = window.analyzeRun || function() { return null; };
+</script>
+
+<script type="text/babel" src="js/shared.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260518d"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260518d"></script>
 
 <script type="text/babel">
 const { useState, useEffect } = React;
