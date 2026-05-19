@@ -138,17 +138,18 @@ setTimeout(function() {
 }, 1500);
 </script>
 
-<script type="text/babel" src="js/shared.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260518i"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260518i"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/garmin-read.jsx?v=20260519b"></script>
 
 <script type="text/babel">
 const { useState, useEffect } = React;
@@ -429,11 +430,11 @@ function WorkoutGeneratorFab({ tweaks }) {
   const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().slice(0,10));
   const [state, setState] = useState(null); // stato runner: { ctl, atl, tsb, daysToRace, weeklyKm, recentRuns }
 
-  // Carica stato Strava + race al primo open
+  // Carica stato Strava + race ad OGNI open (così ogni generazione ha dati freschi)
   useEffect(() => {
-    if (!open || state) return;
+    if (!open) return;
     (async () => {
-      const out = { ctl: 0, atl: 0, tsb: 0, daysToRace: null, weeklyKm: tweaks?.weeklyKm || 25, recentRuns: [] };
+      const out = { ctl: 0, atl: 0, tsb: 0, daysToRace: null, weeklyKm: tweaks?.weeklyKm || 25, recentRuns: [], garmin: null };
       try {
         // Race date
         const iso = (typeof window.USER === 'object' && (window.USER.raceDateISO || window.USER.raceDate)) || tweaks?.raceDate;
@@ -470,6 +471,16 @@ function WorkoutGeneratorFab({ tweaks }) {
           }
         }
       } catch (e) {}
+      // Garmin wellness + training status (se backend configurato)
+      try {
+        if (typeof window.fetchGarminWellnessToday === 'function') {
+          const [w, ts] = await Promise.all([
+            window.fetchGarminWellnessToday().catch(() => null),
+            window.fetchGarminTrainingStatus().catch(() => null),
+          ]);
+          if (w || ts) out.garmin = { wellness: w, trainingStatus: ts };
+        }
+      } catch (e) {}
       setState(out);
     })();
   }, [open]);
@@ -484,10 +495,37 @@ function WorkoutGeneratorFab({ tweaks }) {
       const typeLabel = { auto:'lascia decidere a te', easy:'easy/recupero', tempo:'tempo/soglia', intervals:'intervalli/VO2', long:'lungo' }[type];
       const s = state || { ctl:0, atl:0, tsb:0, daysToRace:null, weeklyKm: tweaks?.weeklyKm || 25, recentRuns: [] };
       const formaLabel = s.tsb > 5 ? 'fresco' : s.tsb > -10 ? 'in equilibrio' : s.tsb > -20 ? 'affaticato' : 'sovraccarico';
-      // Random seed per evitare risposte identiche
-      const seed = Math.random().toString(36).slice(2, 8);
+      // Random seed + timestamp + tracking workout precedenti per evitare ripetizioni
+      const seed = Math.random().toString(36).slice(2, 10);
+      const nowStr = new Date().toISOString();
+      // Recupera ultimi 5 workout AI generati, per dire al modello "non ripetere questi"
+      let previous = [];
+      try { previous = JSON.parse(localStorage.getItem('rc_aiWorkoutsHistory') || '[]').slice(-5); } catch(e) {}
+      const prevList = previous.length ? previous.map(p => `- ${p.title} (${p.type})`).join('\n') : 'nessuno';
+      // Modalità creativa basata su input — varia la STRUTTURA non solo i numeri
+      const variations = [
+        'ripetute brevi (200-600m)', 'ripetute lunghe (800m-1km)', 'cruise intervals (1-2km a soglia)',
+        'tempo continuo a soglia', 'fartlek strutturato', 'progressivo a piramide',
+        'lungo con finale forte', 'lungo medio costante', 'corsa easy + allunghi',
+        'corsa easy pura', 'collinare ripetute brevi', 'tempo + intervalli misti',
+      ];
+      const variationHint = type === 'auto'
+        ? `Scegli LIBERAMENTE tra queste strutture (varia ogni volta): ${variations.join(', ')}.`
+        : `Per tipo "${typeLabel}", varia la STRUTTURA: numero di ripetute, distanze, recuperi. Non usare sempre lo schema 5×1km.`;
 
-      const system = `Sei un coach running esperto. Genera UN allenamento personalizzato per ${userName} (volume ~${s.weeklyKm}km/sett).
+      const system = `Sei un coach running per runner amatori. Genera UN allenamento personalizzato per ${userName} (volume ~${s.weeklyKm}km/sett).
+
+PRINCIPI COACH (non negoziabili):
+1. Priorità continuità e prevenzione infortuni
+2. Niente carichi aggressivi se ci sono segnali di fatica o dolore
+3. Ritmi compatibili con i dati reali, mai inventare velocità mai tenute
+4. Distinguere SEMPRE: chiave / easy / lungo / recupero
+5. Per ogni allenamento indicare: obiettivo, struttura, ritmo target, cosa sentire, errori da evitare
+
+STILE TONO:
+- diretto, pratico, motivante ma non accondiscendente
+- niente teoria inutile
+- struttura chiara e Garmin-pronta
 
 CONTESTO ATLETA OGGI:
 - CTL ${s.ctl} · ATL ${s.atl} · TSB ${s.tsb >= 0 ? '+' : ''}${s.tsb} (forma: ${formaLabel})
@@ -496,13 +534,32 @@ CONTESTO ATLETA OGGI:
 - Tipo richiesto: ${typeLabel}
 ${race ? `- Gara obiettivo: ${race}${s.daysToRace != null ? ' (mancano ' + s.daysToRace + ' giorni)' : ''}${target ? ' — target ' + target + ' ' + targetPace : ''}` : ''}
 ${s.recentRuns.length ? '\nULTIME CORSE:\n' + s.recentRuns.map(r => '- ' + r).join('\n') : ''}
+${s.garmin ? `\nDATI GARMIN OGGI:
+${s.garmin.wellness?.sleep ? `- Sonno: ${s.garmin.wellness.sleep.duration_h}h${s.garmin.wellness.sleep.score ? ' (score ' + s.garmin.wellness.sleep.score + ')' : ''}` : ''}
+${s.garmin.wellness?.resting_hr ? `- FC riposo: ${s.garmin.wellness.resting_hr}bpm` : ''}
+${s.garmin.wellness?.body_battery?.current ? `- Body Battery: ${s.garmin.wellness.body_battery.current}/100` : ''}
+${s.garmin.wellness?.stress_avg ? `- Stress medio: ${s.garmin.wellness.stress_avg}` : ''}
+${s.garmin.wellness?.hrv?.last_night_avg ? `- HRV: ${s.garmin.wellness.hrv.last_night_avg}ms (${s.garmin.wellness.hrv.status || '—'})` : ''}
+${s.garmin.trainingStatus?.vo2max ? `- VO2max: ${s.garmin.trainingStatus.vo2max}` : ''}
+${s.garmin.trainingStatus?.status ? `- Training status: ${s.garmin.trainingStatus.status}` : ''}
+${s.garmin.trainingStatus?.readiness?.score ? `- Training readiness: ${s.garmin.trainingStatus.readiness.score}/100 (${s.garmin.trainingStatus.readiness.level || ''})` : ''}
+${s.garmin.trainingStatus?.recovery_time_h ? `- Recovery time residuo: ${s.garmin.trainingStatus.recovery_time_h}h` : ''}
+` : ''}
 
-REGOLE:
+REGOLE TECNICHE:
 - Se TSB < -15: proponi recupero/easy, NIENTE qualità
 - Se mancano <= 7 giorni alla gara: solo attivazioni brevi, niente carichi
 - Se mancano 7-21 giorni: lavori specifici a passo gara permessi
 - Adatta i ritmi target ai pace VERI delle ultime corse — non inventare velocità che l'atleta non ha mai tenuto
-- Ogni allenamento DIVERSO dai precedenti (seed sessione: ${seed})
+
+REGOLE VARIETÀ (CRITICO):
+- ${variationHint}
+- NON ripetere i workout già proposti negli ultimi giorni:
+${prevList}
+- Cambia: distanza, durata ripetute, numero ripetute, durata recuperi, intensità.
+- Anche allenamenti dello stesso tipo devono avere struttura DIVERSA ogni volta.
+- Sii creativo: introdurre allunghi, progressioni, contrasti, blocchi.
+- Seed sessione: ${seed} · timestamp: ${nowStr}
 
 FORMATO RISPOSTA: SOLO un blocco JSON tra \`\`\`workout e \`\`\`. Niente altro.
 
@@ -553,6 +610,12 @@ Note:
           });
         }
         setWorkout(parsed);
+        // Memorizza per evitare ripetizioni future
+        try {
+          const hist = JSON.parse(localStorage.getItem('rc_aiWorkoutsHistory') || '[]');
+          hist.push({ title: parsed.title, type: parsed.type, at: nowStr });
+          localStorage.setItem('rc_aiWorkoutsHistory', JSON.stringify(hist.slice(-10)));
+        } catch(e) {}
       } catch (e) {
         setErr('AI ha risposto ma JSON non valido. Riprova.');
       }
@@ -603,6 +666,15 @@ Note:
                 CTL <b style={{color:'#fff'}}>{state.ctl}</b> · ATL <b style={{color:'#fff'}}>{state.atl}</b> · TSB <b style={{color:'#fff'}}>{state.tsb >= 0 ? '+' : ''}{state.tsb}</b>
                 {state.daysToRace != null && <> · <b style={{color:'#fff'}}>{state.daysToRace}gg</b> alla gara</>}
                 {' · '}~<b style={{color:'#fff'}}>{state.weeklyKm}</b>km/sett
+                {state.garmin?.wellness && (
+                  <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.08)', color: '#aaa', fontSize: 10 }}>
+                    <span style={{ color: '#4D9EFF', fontWeight: 700, letterSpacing: '0.08em' }}>GARMIN:</span>{' '}
+                    {state.garmin.wellness.sleep?.duration_h ? `💤 ${state.garmin.wellness.sleep.duration_h}h` : ''}
+                    {state.garmin.wellness.body_battery?.current ? ` · 🔋 ${state.garmin.wellness.body_battery.current}` : ''}
+                    {state.garmin.wellness.resting_hr ? ` · ❤️ ${state.garmin.wellness.resting_hr}bpm` : ''}
+                    {state.garmin.trainingStatus?.readiness?.score ? ` · ✓ ${state.garmin.trainingStatus.readiness.score}/100` : ''}
+                  </div>
+                )}
               </div>
             )}
 

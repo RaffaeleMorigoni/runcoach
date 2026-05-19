@@ -323,6 +323,168 @@ def upload_workout(req: UploadReq, _=Depends(require_auth)):
         raise HTTPException(500, detail={"code": "UPLOAD_ERROR", "message": f"{type(e).__name__}: {e}"})
 
 
+# ────────────── READ Endpoints (Garmin → app) ──────────────
+
+@app.get("/activities")
+def get_activities(limit: int = 20, _=Depends(require_auth)):
+    """Ultime N attività in formato Strava-like per merge facile lato client."""
+    global _client
+    if not _client:
+        raise HTTPException(401, detail={"code": "NOT_LOGGED_IN", "message": "Login required"})
+    try:
+        raw = _client.get_activities(0, limit)
+        out = []
+        for a in raw or []:
+            type_key = (a.get("activityType") or {}).get("typeKey") or "running"
+            if "run" not in type_key and "walk" not in type_key and "cycling" not in type_key:
+                continue
+            start = a.get("startTimeLocal") or a.get("startTimeGMT")
+            dist = a.get("distance") or 0
+            mov  = a.get("movingDuration") or a.get("duration") or 0
+            avg_speed = (dist / mov) if mov else 0
+            out.append({
+                "id":                  a.get("activityId"),
+                "name":                a.get("activityName") or "Activity",
+                "type":                "Run" if "run" in type_key else type_key.capitalize(),
+                "source":              "garmin",
+                "start_date":          start,
+                "start_date_local":    start,
+                "distance":            dist,
+                "moving_time":         int(mov),
+                "elapsed_time":        int(a.get("duration") or mov),
+                "average_speed":       avg_speed,
+                "average_heartrate":   a.get("averageHR"),
+                "max_heartrate":       a.get("maxHR"),
+                "total_elevation_gain": a.get("elevationGain") or 0,
+                "calories":            a.get("calories"),
+            })
+        return {"ok": True, "activities": out, "count": len(out)}
+    except GarminConnectAuthenticationError:
+        _client = None
+        raise HTTPException(401, detail={"code": "AUTH", "message": "Sessione scaduta"})
+    except Exception as e:
+        import traceback
+        print(f"[ERROR /activities] {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
+        raise HTTPException(500, detail={"code": "ERROR", "message": str(e)})
+
+
+@app.get("/wellness/today")
+def get_wellness(_=Depends(require_auth)):
+    """Snapshot oggi: sleep + stress + body battery + resting HR + steps."""
+    global _client
+    if not _client:
+        raise HTTPException(401, detail={"code": "NOT_LOGGED_IN", "message": "Login required"})
+    today = date.today().isoformat()
+    out = {"date": today}
+    try:
+        try:
+            sleep = _client.get_sleep_data(today)
+            if sleep:
+                d = sleep.get("dailySleepDTO") or {}
+                out["sleep"] = {
+                    "duration_h":   round((d.get("sleepTimeSeconds") or 0) / 3600, 2),
+                    "score":        (d.get("sleepScores") or {}).get("overall", {}).get("value"),
+                    "deep_min":     round((d.get("deepSleepSeconds") or 0) / 60),
+                    "rem_min":      round((d.get("remSleepSeconds") or 0) / 60),
+                    "light_min":    round((d.get("lightSleepSeconds") or 0) / 60),
+                    "awake_min":    round((d.get("awakeSleepSeconds") or 0) / 60),
+                }
+        except Exception as e:
+            print(f"[WARN] sleep: {e}", flush=True)
+
+        try:
+            stats = _client.get_stats(today)
+            if stats:
+                out["resting_hr"]  = stats.get("restingHeartRate")
+                out["steps"]       = stats.get("totalSteps")
+                out["body_battery"] = {
+                    "highest": stats.get("bodyBatteryHighestValue"),
+                    "lowest":  stats.get("bodyBatteryLowestValue"),
+                    "current": stats.get("bodyBatteryMostRecentValue"),
+                }
+                out["stress_avg"]  = stats.get("averageStressLevel")
+        except Exception as e:
+            print(f"[WARN] stats: {e}", flush=True)
+
+        try:
+            hrv = _client.get_hrv_data(today)
+            if hrv and hrv.get("hrvSummary"):
+                out["hrv"] = {
+                    "last_night_avg": hrv["hrvSummary"].get("lastNightAvg"),
+                    "status":         hrv["hrvSummary"].get("status"),
+                    "baseline":       (hrv["hrvSummary"].get("baseline") or {}).get("balancedLow"),
+                }
+        except Exception as e:
+            print(f"[WARN] hrv: {e}", flush=True)
+
+        return {"ok": True, "data": out}
+    except GarminConnectAuthenticationError:
+        _client = None
+        raise HTTPException(401, detail={"code": "AUTH", "message": "Sessione scaduta"})
+    except Exception as e:
+        import traceback
+        print(f"[ERROR /wellness/today] {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
+        raise HTTPException(500, detail={"code": "ERROR", "message": str(e)})
+
+
+@app.get("/training-status")
+def get_training_status(_=Depends(require_auth)):
+    """Training status, VO2max, training readiness, recovery time."""
+    global _client
+    if not _client:
+        raise HTTPException(401, detail={"code": "NOT_LOGGED_IN", "message": "Login required"})
+    today = date.today().isoformat()
+    out = {"date": today}
+    try:
+        try:
+            ts = _client.get_training_status(today)
+            if ts:
+                rec = ts.get("mostRecentVO2Max") or {}
+                gen = rec.get("generic") or {}
+                out["vo2max"] = gen.get("vo2MaxValue") or gen.get("vo2MaxPreciseValue")
+                ts_data = (ts.get("mostRecentTrainingStatus") or {}).get("latestTrainingStatusData") or {}
+                # Garmin restituisce un dict indicizzato per device, prendo il primo valore
+                if isinstance(ts_data, dict) and ts_data:
+                    first = next(iter(ts_data.values()), {}) if isinstance(ts_data, dict) else {}
+                    if isinstance(first, dict):
+                        out["status"]        = first.get("trainingStatusFeedbackPhrase") or first.get("trainingStatus")
+                        out["load"]          = first.get("acuteTrainingLoadDTO", {}).get("acwrPercent")
+                        out["fitness_level"] = first.get("fitnessTrend")
+        except Exception as e:
+            print(f"[WARN] training_status: {e}", flush=True)
+
+        try:
+            ready = _client.get_training_readiness(today)
+            if ready and isinstance(ready, list) and ready:
+                r = ready[0]
+                out["readiness"] = {
+                    "score":   r.get("score"),
+                    "level":   r.get("level"),
+                    "feedback": r.get("feedbackLong") or r.get("feedbackShort"),
+                }
+        except Exception as e:
+            print(f"[WARN] readiness: {e}", flush=True)
+
+        try:
+            recov = _client.get_user_summary(today)
+            if recov:
+                # In get_stats c'è già recoveryTime? Provo qui
+                rt = recov.get("nextRecoveryTime") or recov.get("recoveryTime")
+                if rt is not None:
+                    out["recovery_time_h"] = rt
+        except Exception as e:
+            print(f"[WARN] recovery: {e}", flush=True)
+
+        return {"ok": True, "data": out}
+    except GarminConnectAuthenticationError:
+        _client = None
+        raise HTTPException(401, detail={"code": "AUTH", "message": "Sessione scaduta"})
+    except Exception as e:
+        import traceback
+        print(f"[ERROR /training-status] {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
+        raise HTTPException(500, detail={"code": "ERROR", "message": str(e)})
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
