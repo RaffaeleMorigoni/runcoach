@@ -146,17 +146,17 @@ setTimeout(function() {
 }, 1500);
 </script>
 
-<script type="text/babel" src="js/shared.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260519e"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260519f"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260519f"></script>
 <script>
 // Garmin read helpers (inline — niente file separato)
 (function() {
@@ -178,6 +178,24 @@ setTimeout(function() {
     return out.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
   };
 })();
+
+// ─── Monkey-patch fetchActivities: merge automatico Strava + Garmin ─────────
+// Tutti i grafici (Home/Progressi/Coach) ricevono dati combinati senza modifiche ai js/
+setTimeout(function() {
+  if (typeof window.fetchActivities !== 'function' || window.__fetchActivitiesPatched) return;
+  const orig = window.fetchActivities;
+  window.fetchActivities = async function(auth, perPage) {
+    const stravaActs = await orig(auth, perPage).catch(() => []);
+    try {
+      const garminActs = await window.fetchGarminActivities(perPage || 30);
+      return window.mergeActivities(stravaActs || [], garminActs || []);
+    } catch (e) {
+      return stravaActs || [];
+    }
+  };
+  window.__fetchActivitiesPatched = true;
+  console.log('[RunCoach] fetchActivities patched: Strava + Garmin merge active');
+}, 2000);
 </script>
 
 <script type="text/babel">
@@ -463,7 +481,7 @@ function WorkoutGeneratorFab({ tweaks }) {
   useEffect(() => {
     if (!open) return;
     (async () => {
-      const out = { ctl: 0, atl: 0, tsb: 0, daysToRace: null, weeklyKm: tweaks?.weeklyKm || 25, recentRuns: [], garmin: null };
+      const out = { ctl: 0, atl: 0, tsb: 0, daysToRace: null, weeklyKm: tweaks?.weeklyKm || 25, recentRuns: [], garmin: null, pbs: null, vdotPaces: null, raceName: null, raceDate: null };
       try {
         // Race date
         const iso = (typeof window.USER === 'object' && (window.USER.raceDateISO || window.USER.raceDate)) || tweaks?.raceDate;
@@ -496,6 +514,37 @@ function WorkoutGeneratorFab({ tweaks }) {
                 const dStr = isFinite(dt) ? `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}` : '—';
                 return `${dStr}: ${km.toFixed(1)}km @ ${pace}${a.avg_hr ? ' · ' + Math.round(a.avg_hr) + 'bpm' : ''}`;
               });
+              // PB calcolati dai dati Strava+Garmin merged
+              if (typeof window.computePBsFromActivities === 'function') {
+                const pbs = window.computePBsFromActivities(acts, null);
+                if (pbs) {
+                  out.pbs = pbs;
+                  // Calcola ritmi VDOT-based da PB più recenti (preferenza 10K > 21K > 5K)
+                  if (typeof window.calculateVDOT === 'function' && typeof window.predictTimeFromVDOT === 'function') {
+                    const candidates = [
+                      ['10k', 10000, pbs['10k']?.seconds],
+                      ['21k', 21097, pbs['21k']?.seconds],
+                      ['5k',  5000,  pbs['5k']?.seconds],
+                    ].filter(c => c[2]);
+                    if (candidates.length) {
+                      let bestVdot = 0;
+                      for (const [k, dist, sec] of candidates) {
+                        const v = window.calculateVDOT(dist, sec);
+                        if (v > bestVdot) bestVdot = v;
+                      }
+                      if (bestVdot > 0) {
+                        const raceP   = Math.round(window.predictTimeFromVDOT(bestVdot, 21097) / 21.097);
+                        const tempoP  = Math.max(raceP - 15, 240);
+                        const vo2P    = Math.max(raceP - 60, 200);
+                        const easyP   = raceP + 50;
+                        const longP   = raceP + 35;
+                        const fmt = s => `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
+                        out.vdotPaces = { vdot: bestVdot, race: fmt(raceP), tempo: fmt(tempoP), vo2: fmt(vo2P), easy: fmt(easyP), long: fmt(longP) };
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -563,6 +612,17 @@ CONTESTO ATLETA OGGI:
 - Tipo richiesto: ${typeLabel}
 ${race ? `- Gara obiettivo: ${race}${s.daysToRace != null ? ' (mancano ' + s.daysToRace + ' giorni)' : ''}${target ? ' — target ' + target + ' ' + targetPace : ''}` : ''}
 ${s.recentRuns.length ? '\nULTIME CORSE:\n' + s.recentRuns.map(r => '- ' + r).join('\n') : ''}
+${s.pbs ? `\nPERSONAL BEST (calcolati da Strava+Garmin):
+${s.pbs['5k']  ? `- 5K:  ${s.pbs['5k'].time}  (${s.pbs['5k'].pace})${s.pbs['5k'].date ? ' — ' + s.pbs['5k'].date : ''}` : ''}
+${s.pbs['10k'] ? `- 10K: ${s.pbs['10k'].time} (${s.pbs['10k'].pace})${s.pbs['10k'].date ? ' — ' + s.pbs['10k'].date : ''}` : ''}
+${s.pbs['21k'] ? `- 21K: ${s.pbs['21k'].time} (${s.pbs['21k'].pace})${s.pbs['21k'].date ? ' — ' + s.pbs['21k'].date : ''}` : ''}` : ''}
+${s.vdotPaces ? `\nRITMI TARGET DERIVATI VDOT ${s.vdotPaces.vdot} (usali nei target_pace):
+- Easy:        ${s.vdotPaces.easy}/km
+- Lungo:       ${s.vdotPaces.long}/km
+- Ritmo gara:  ${s.vdotPaces.race}/km (mezza)
+- Tempo:       ${s.vdotPaces.tempo}/km
+- Intervalli:  ${s.vdotPaces.vo2}/km
+USA ESATTAMENTE QUESTI RITMI come centro target. Non inventare ritmi diversi.` : ''}
 ${s.garmin ? `\nDATI GARMIN OGGI:
 ${s.garmin.wellness?.sleep ? `- Sonno: ${s.garmin.wellness.sleep.duration_h}h${s.garmin.wellness.sleep.score ? ' (score ' + s.garmin.wellness.sleep.score + ')' : ''}` : ''}
 ${s.garmin.wellness?.resting_hr ? `- FC riposo: ${s.garmin.wellness.resting_hr}bpm` : ''}
@@ -702,6 +762,20 @@ Note:
                     {state.garmin.wellness.body_battery?.current ? ` · 🔋 ${state.garmin.wellness.body_battery.current}` : ''}
                     {state.garmin.wellness.resting_hr ? ` · ❤️ ${state.garmin.wellness.resting_hr}bpm` : ''}
                     {state.garmin.trainingStatus?.readiness?.score ? ` · ✓ ${state.garmin.trainingStatus.readiness.score}/100` : ''}
+                  </div>
+                )}
+                {state.pbs && (
+                  <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.08)', color: '#aaa', fontSize: 10 }}>
+                    <span style={{ color: '#A78BFA', fontWeight: 700, letterSpacing: '0.08em' }}>PB:</span>{' '}
+                    {state.pbs['5k']  && `5K ${state.pbs['5k'].time} · `}
+                    {state.pbs['10k'] && `10K ${state.pbs['10k'].time} · `}
+                    {state.pbs['21k'] && `21K ${state.pbs['21k'].time}`}
+                  </div>
+                )}
+                {state.vdotPaces && (
+                  <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.08)', color: '#aaa', fontSize: 10 }}>
+                    <span style={{ color: '#00E5C0', fontWeight: 700, letterSpacing: '0.08em' }}>VDOT {state.vdotPaces.vdot}:</span>{' '}
+                    easy {state.vdotPaces.easy} · tempo {state.vdotPaces.tempo} · vo2 {state.vdotPaces.vo2}
                   </div>
                 )}
               </div>
