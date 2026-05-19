@@ -725,6 +725,7 @@ function GarminBuilderScreen({ onBack, tweaks }) {
   );
 
   // ── Builder view ──
+  if (!workout) { setMode('presets'); return null; }
   return (
     <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'none' }}>
       {/* Header */}
