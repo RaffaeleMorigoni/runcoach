@@ -103,6 +103,15 @@ async function fetchStats(auth, athleteId) {
   return stravaGet(`/athletes/${athleteId}/stats`, auth);
 }
 
+async function fetchActivityDetails(auth, activityId) {
+  return stravaGet(`/activities/${activityId}?include_all_efforts=false`, auth);
+}
+
+async function fetchActivityLaps(auth, activityId) {
+  try { return await stravaGet(`/activities/${activityId}/laps`, auth); }
+  catch { return []; }
+}
+
 // ─── Data formatters ────────────────────────────────────────────────────────
 function formatPace(metersPerSec) {
   if (!metersPerSec) return '—';
@@ -162,6 +171,7 @@ function guessRunType(act) {
 Object.assign(window, {
   StravaAuth, buildAuthUrl, exchangeCode, refreshToken,
   getValidAuth, fetchAthlete, fetchActivities, fetchStats,
+  fetchActivityDetails, fetchActivityLaps,
   formatPace, formatDistance, formatDuration, formatDate, activityToWorkout,
   STRAVA_CLIENT_ID,
 });

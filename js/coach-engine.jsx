@@ -459,6 +459,162 @@ function suggestPlanAdjustment(loadAnalysis, plannedWorkout, daysToRace) {
   return { suggestions, shouldRecalibrate: suggestions.length > 0 };
 }
 
+// ─── Genera piano settimanale: 7 giorni a partire da oggi ────────────────────
+// Ogni giorno: { date, dow, label, workout, isToday, isPast }
+function generateWeekPlan(loadHistory, raceDateStr) {
+  const days = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today.getTime() + i * 86400000);
+    const dateIso = d.toISOString().slice(0, 10);
+    // Genera workout a quella data: simulo daysToRace per quella data
+    const race = new Date(raceDateStr);
+    const daysFromThatDay = Math.ceil((race - d) / 86400000);
+    const fakeRaceDate = new Date(today.getTime() + daysFromThatDay * 86400000).toISOString();
+    const w = generateTodayWorkout(loadHistory, fakeRaceDate);
+    days.push({
+      date: dateIso,
+      dow: d.getDay(),
+      dayLabel: d.toLocaleDateString('it-IT', { weekday: 'short' }),
+      dateLabel: d.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }),
+      workout: w,
+      isToday: i === 0,
+      daysFromRace: daysFromThatDay,
+    });
+  }
+  return days;
+}
+
+// ─── Detector missed sessions: confronta piano vs realtà ─────────────────────
+// Prende activities Strava degli ultimi 7gg + il piano settimanale precedente
+// Restituisce array di { date, planned, actual, status: 'done'|'missed'|'partial'|'overdone' }
+function compareActualVsPlanned(activities, plannedWeekIso) {
+  if (!activities || !plannedWeekIso) return [];
+  const result = [];
+  for (const day of plannedWeekIso) {
+    const dayActivities = activities.filter(a => {
+      const aDate = new Date(a.start_date_local || a.start_date).toISOString().slice(0, 10);
+      return aDate === day.date;
+    });
+    const totalKm = dayActivities.reduce((s, a) => s + (a.distance || 0) / 1000, 0);
+    const planned = day.workout;
+    const plannedKm = planned?.distance || 0;
+
+    let status = 'pending';
+    if (plannedKm === 0 && totalKm === 0) status = 'rest_ok';
+    else if (plannedKm === 0 && totalKm > 0) status = 'overdone';
+    else if (plannedKm > 0 && totalKm === 0) status = 'missed';
+    else if (totalKm >= plannedKm * 0.8) status = 'done';
+    else if (totalKm > 0) status = 'partial';
+
+    result.push({
+      date: day.date,
+      planned: planned,
+      actualKm: totalKm,
+      activities: dayActivities,
+      status,
+    });
+  }
+  return result;
+}
+
+// ─── Ricalibrazione completa: produce changes con ragioni ────────────────────
+// Restituisce { changes: [{day, from, to, reason}], summary, severity }
+function recalibratePlan({ activities, loadHistory, raceDateStr, lastPlan }) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const race = new Date(raceDateStr);
+  const daysToRace = Math.ceil((race - today) / 86400000);
+  const last = loadHistory[loadHistory.length - 1] || { tsb: 0, ctl: 30, atl: 30 };
+
+  const changes = [];
+  let severity = 'info'; // info | warn | critical
+
+  // 1. Confronta ultimi 7gg con piano precedente
+  let missedCount = 0;
+  let partialCount = 0;
+  if (lastPlan) {
+    const comparison = compareActualVsPlanned(activities, lastPlan);
+    for (const c of comparison) {
+      if (c.status === 'missed' && c.planned?.distance > 0) missedCount++;
+      if (c.status === 'partial') partialCount++;
+    }
+  }
+
+  // 2. Genera nuovo piano
+  const newPlan = generateWeekPlan(loadHistory, raceDateStr);
+
+  // 3. Decisioni di ricalibrazione
+  if (last.tsb < -20) {
+    severity = 'critical';
+    changes.push({
+      day: 'oggi',
+      type: 'reduce_load',
+      reason: `TSB ${Math.round(last.tsb)} — sei in deficit profondo. Sostituisco workout intenso con easy.`,
+    });
+    // Trasforma il primo workout intenso della settimana in easy
+    for (const day of newPlan) {
+      if (['TEMPO', 'VO2', 'LUNGO'].includes(day.workout?.intensity)) {
+        day.workout = {
+          title: 'Recupero attivo',
+          detail: 'Cambio piano: serve recupero. Easy ' + (day.workout.distance ? Math.round(day.workout.distance * 0.6) + 'km' : '4km'),
+          distance: day.workout.distance ? day.workout.distance * 0.6 : 4,
+          duration: Math.round((day.workout.duration || 30) * 0.6),
+          pace: '6:10',
+          intensity: 'EASY',
+          modified: true,
+        };
+        break;
+      }
+    }
+  } else if (missedCount >= 2) {
+    severity = 'warn';
+    changes.push({
+      day: 'settimana',
+      type: 'volume_drop',
+      reason: `Hai saltato ${missedCount} sessioni la settimana scorsa. Riduco il volume di questa settimana del 20%.`,
+    });
+    for (const day of newPlan) {
+      if (day.workout?.distance > 0) {
+        day.workout = { ...day.workout, distance: day.workout.distance * 0.8, modified: true };
+      }
+    }
+  } else if (last.tsb > 15 && daysToRace > 14) {
+    severity = 'info';
+    changes.push({
+      day: 'settimana',
+      type: 'add_quality',
+      reason: `Forma fresca (TSB +${Math.round(last.tsb)}) e ${daysToRace}gg alla gara — è il momento di stimolare. Confermo qualità del piano.`,
+    });
+  }
+
+  // 4. Vicino alla gara: priorità freschezza
+  if (daysToRace <= 10 && daysToRace > 0 && last.atl > last.ctl * 1.1) {
+    if (severity !== 'critical') severity = 'warn';
+    changes.push({
+      day: 'taper',
+      type: 'taper_emphasis',
+      reason: `${daysToRace}gg alla gara con fatica acuta alta — il taper deve essere rigoroso. Niente esperimenti.`,
+    });
+  }
+
+  let summary = '';
+  if (changes.length === 0) summary = 'Piano confermato — nessun aggiustamento necessario.';
+  else if (severity === 'critical') summary = 'Piano ricalibrato per recupero urgente.';
+  else if (severity === 'warn') summary = 'Piano aggiustato in base ai tuoi ultimi giorni.';
+  else summary = 'Piccoli aggiustamenti al piano della settimana.';
+
+  return {
+    plan: newPlan,
+    changes,
+    summary,
+    severity,
+    metrics: { missedCount, partialCount, tsb: last.tsb, daysToRace },
+    timestamp: new Date().toISOString(),
+  };
+}
+
 // ─── Helper: parse pace string "5:35/km" → secondi ────────────────────────────
 function paceStringToSec(str) {
   if (!str) return null;
@@ -496,38 +652,97 @@ function activitiesToTrainingData(activities) {
 
 // ─── generateTodayWorkout: workout di oggi in base a giorni-a-gara e forma ───
 // Restituisce { title, detail, distance, duration, pace, intensity }
-function generateTodayWorkout(loadHistory, raceDateStr) {
-  const last = loadHistory[loadHistory.length - 1] || { tsb: 0, ctl: 30 };
+function generateTodayWorkout(loadHistory, raceDateStr, opts = {}) {
+  const last = loadHistory[loadHistory.length - 1] || { tsb: 0, ctl: 30, atl: 30 };
   const today = new Date();
-  const race = new Date(raceDateStr);
-  const daysToRace = Math.ceil((race - today) / 86400000);
-  const dow = today.getDay(); // 0=domenica … 6=sabato
+  const race = raceDateStr ? new Date(raceDateStr) : null;
+  const daysToRace = race && !isNaN(race) ? Math.ceil((race - today) / 86400000) : null;
+  const dow = today.getDay();
 
-  // Dentro la settimana di taper (≤ 7 gg)
-  if (daysToRace <= 7 && daysToRace >= 0) {
-    if (daysToRace === 0)  return { title:'GARA · Mezza Maratona', detail:'21.097 km · target 1:58 · passo 5:35/km. Buona gara!', distance:21.1, duration:118, pace:'5:35', intensity:'GARA' };
-    if (daysToRace === 1)  return { title:'Riposo + attivazione',  detail:'10\' camminata + 4× allunghi 80m. Riposare presto.', distance:1.5, duration:20, pace:'CAM', intensity:'PRE-GARA' };
-    if (daysToRace === 2)  return { title:'Attivazione breve',     detail:'4 km easy + 3× 100m allunghi. Caricare carbo.', distance:4, duration:25, pace:'6:10', intensity:'EASY' };
-    if (daysToRace === 3)  return { title:'Riposo totale',         detail:'Giorno OFF. Mobilità, sonno, idratazione.', distance:0, duration:0, pace:'—', intensity:'OFF' };
-    if (daysToRace === 4)  return { title:'Stimolo gara',          detail:'2km wu + 4 km a passo gara (5:35/km) + 1km cd', distance:7, duration:42, pace:'5:35', intensity:'TEMPO' };
-    if (daysToRace === 5)  return { title:'Easy 5km',              detail:'Corsa molto facile, gambe sciolte.', distance:5, duration:32, pace:'6:00', intensity:'EASY' };
-    if (daysToRace === 6)  return { title:'Easy 6km',              detail:'Ritmo conversazionale, niente sforzo.', distance:6, duration:38, pace:'6:00', intensity:'EASY' };
-    if (daysToRace === 7)  return { title:'Lungo leggero 12km',    detail:'Ultimo lungo prima della gara, ritmo facile.', distance:12, duration:78, pace:'6:10', intensity:'LUNGO' };
+  // ─── Passi derivati dai PB reali (VDOT-based) ─────────────────────────────
+  // opts.pbs = { '5k': {seconds, distanceMeters}, ... } passati da home-v2
+  const pbs = opts.pbs || {};
+  let racePaceSec = 335;     // fallback 5:35/km
+  let easyPaceSec = 390;
+  let tempoPaceSec = 320;
+  let vo2PaceSec = 280;
+
+  // Se abbiamo VDOT, deriviamo i passi
+  let vdot = null;
+  for (const k of ['10k','21k','5k']) {
+    const pb = pbs[k];
+    if (pb && pb.seconds && pb.distanceMeters) {
+      const v = calculateVDOT(pb.distanceMeters, pb.seconds);
+      if (v && (!vdot || v > vdot)) vdot = v;
+    }
+  }
+  if (vdot) {
+    // Stime passi da VDOT (formula Daniels semplificata)
+    racePaceSec  = Math.round(predictTimeFromVDOT(vdot, 21097) / 21.097);
+    tempoPaceSec = Math.round(racePaceSec - 15);  // tempo ~ 5-15s/km più veloce di gara mezza
+    vo2PaceSec   = Math.round(racePaceSec - 60);
+    easyPaceSec  = Math.round(racePaceSec + 50);
+  }
+  const fmt = (s) => `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
+
+  // ─── Volume settimanale già fatto (per sapere se "ho già macinato") ───────
+  const weekKm = (opts.trainingData || []).filter(a => {
+    const d = new Date(a.date);
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+    monday.setHours(0,0,0,0);
+    return d >= monday;
+  }).reduce((s, a) => s + (a.distance_km || 0), 0);
+
+  const ctl = last.ctl || 30;
+  const targetWeeklyKm = Math.max(20, Math.round(ctl * 1.3));
+  const remainingKm = Math.max(0, targetWeeklyKm - weekKm);
+
+  // ─── 1. Settimana di gara (taper) ────────────────────────────────────────
+  if (daysToRace !== null && daysToRace <= 7 && daysToRace >= 0) {
+    if (daysToRace === 0)  return { title:'🏁 GARA', detail:`21.097 km · target ${fmt(racePaceSec)}/km · ${vdot?'VDOT '+vdot:''}. Buona gara!`, distance:21.1, duration:Math.round(21.1*racePaceSec/60), pace:fmt(racePaceSec), intensity:'GARA', why:'Giorno gara' };
+    if (daysToRace === 1)  return { title:'Riposo + attivazione', detail:`10\' camminata + 4× allunghi 80m a ${fmt(vo2PaceSec)}/km. Idratazione, sonno.`, distance:1.5, duration:20, pace:'CAM', intensity:'PRE-GARA', why:'Vigilia: solo attivazione neuromuscolare' };
+    if (daysToRace === 2)  return { title:'Shake-out 4km', detail:`4 km easy a ${fmt(easyPaceSec)}/km + 3× 100m allunghi. Carbo-load 7 g/kg.`, distance:4, duration:Math.round(4*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'EASY', why:'-2 gg: gambe pronte, carbo' };
+    if (daysToRace === 3)  return { title:'Riposo totale', detail:'Giorno OFF. Mobilità leggera, sonno, idratazione.', distance:0, duration:0, pace:'—', intensity:'OFF', why:'-3 gg: recupero finale' };
+    if (daysToRace === 4)  return { title:'Stimolo gara', detail:`2km wu + 4 km a ${fmt(racePaceSec)}/km (passo gara) + 1km cd`, distance:7, duration:Math.round(7*racePaceSec/60+10), pace:fmt(racePaceSec), intensity:'TEMPO', why:'-4 gg: ultima rifinitura ritmo gara' };
+    if (daysToRace === 5)  return { title:'Easy 5km', detail:`Corsa molto facile a ${fmt(easyPaceSec)}/km. Gambe sciolte.`, distance:5, duration:Math.round(5*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'EASY', why:'-5 gg: scarico volume' };
+    if (daysToRace === 6)  return { title:'Easy 6km', detail:`Ritmo conversazionale ${fmt(easyPaceSec)}/km, niente sforzo.`, distance:6, duration:Math.round(6*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'EASY', why:'-6 gg: mantieni mobilità aerobica' };
+    if (daysToRace === 7)  return { title:'Ultimo lungo light 10km', detail:`Lungo ridotto a ${fmt(easyPaceSec)}/km. Niente progressioni.`, distance:10, duration:Math.round(10*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'LUNGO', why:'-7 gg: ultimo lungo del taper, volume ridotto' };
   }
 
-  // Forma molto bassa → recupero
-  if (last.tsb < -25) return { title:'Recupero attivo', detail:'Sei in deficit. 30\' camminata o yoga. Riposo.', distance:0, duration:30, pace:'—', intensity:'RECUP' };
+  // ─── 2. Forma critica: stop o recupero ───────────────────────────────────
+  if (last.tsb < -30) return { title:'STOP carico', detail:'Forma in deficit estremo. Riposo totale + sonno + idratazione. Niente corsa oggi.', distance:0, duration:0, pace:'—', intensity:'OFF', why:`TSB ${Math.round(last.tsb)}: rischio sovraccarico` };
+  if (last.tsb < -20) return { title:'Recupero attivo', detail:'30\' camminata o jog molto lento. Mobilità, foam roller.', distance:3, duration:30, pace:fmt(easyPaceSec+30), intensity:'RECUP', why:`TSB ${Math.round(last.tsb)}: serve scarico` };
 
-  // Pattern settimanale standard (build phase)
-  if (dow === 0)  return { title:'Lungo',           detail:'Lungo settimanale a passo conversazionale.', distance:18, duration:115, pace:'6:00', intensity:'LUNGO' };
-  if (dow === 1)  return { title:'Riposo',          detail:'Giorno OFF. Mobilità o stretching.', distance:0, duration:0, pace:'—', intensity:'OFF' };
-  if (dow === 2)  return { title:'Tempo run',       detail:'2km wu + 5km @ passo gara + 1km cd', distance:8, duration:45, pace:'5:35', intensity:'TEMPO' };
-  if (dow === 3)  return { title:'Easy + allunghi', detail:'6km easy + 6× 100m allunghi finali', distance:6, duration:40, pace:'6:00', intensity:'EASY' };
-  if (dow === 4)  return { title:'Intervalli',      detail:'2km wu + 6× 800m @ 4:50/km r=2\' + 1km cd', distance:9, duration:50, pace:'4:50', intensity:'VO2' };
-  if (dow === 5)  return { title:'Easy o riposo',   detail:'Corsa rigenerativa 5 km, oppure OFF.', distance:5, duration:32, pace:'6:10', intensity:'EASY' };
-  if (dow === 6)  return { title:'Pre-lungo',       detail:'4 km easy + 3 allunghi. Domani lungo.', distance:4, duration:26, pace:'6:00', intensity:'EASY' };
+  // ─── 3. Quota settimanale già raggiunta ──────────────────────────────────
+  if (weekKm >= targetWeeklyKm * 1.1) {
+    return { title:'Easy 5km opzionale', detail:`Hai già fatto ${weekKm.toFixed(1)} km questa settimana (target ${targetWeeklyKm}). Riposo o jog leggero.`, distance:5, duration:Math.round(5*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'EASY', why:`Volume settimanale superato (${weekKm.toFixed(0)}/${targetWeeklyKm} km)` };
+  }
 
-  return { title:'Corsa easy', detail:'5 km a passo conversazionale.', distance:5, duration:32, pace:'6:00', intensity:'EASY' };
+  // ─── 4. Pattern settimanale modulato per forma e quota residua ──────────
+  // Decisione qualità: solo se TSB ≥ -10 e abbiamo fatto meno del 60% del target
+  const canQuality = last.tsb >= -10 && weekKm < targetWeeklyKm * 0.7;
+
+  if (dow === 0) {
+    const longKm = Math.min(Math.max(8, Math.round(remainingKm * 0.55)), 22);
+    return { title:`Lungo ${longKm}km`, detail:`A ${fmt(easyPaceSec)}/km. Ultimi 3km in progressione.`, distance:longKm, duration:Math.round(longKm*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'LUNGO', why:`Lungo settimanale, ${longKm}km calcolato su CTL ${Math.round(ctl)}` };
+  }
+  if (dow === 1) return { title:'Riposo', detail:'Giorno OFF dopo il lungo. Mobilità, stretching.', distance:0, duration:0, pace:'—', intensity:'OFF', why:'Recupero post-lungo' };
+
+  if (dow === 2 && canQuality) {
+    return { title:'Tempo run', detail:`2km wu + 5km a ${fmt(tempoPaceSec)}/km + 1km cd`, distance:8, duration:Math.round(8*tempoPaceSec/60+5), pace:fmt(tempoPaceSec), intensity:'TEMPO', why:`Qualità: TSB ${Math.round(last.tsb)} ok, settimana al ${Math.round(weekKm/targetWeeklyKm*100)}%` };
+  }
+  if (dow === 3) return { title:'Easy + allunghi', detail:`6km a ${fmt(easyPaceSec)}/km + 6× 100m allunghi`, distance:6, duration:Math.round(6*easyPaceSec/60+5), pace:fmt(easyPaceSec), intensity:'EASY', why:'Aerobic + skill velocità' };
+
+  if (dow === 4 && canQuality) {
+    return { title:'Intervalli VO2', detail:`2km wu + 6× 800m a ${fmt(vo2PaceSec)}/km r=2\' + 1km cd`, distance:9, duration:50, pace:fmt(vo2PaceSec), intensity:'VO2', why:`Qualità: TSB ${Math.round(last.tsb)}, VDOT ${vdot||'—'}` };
+  }
+  if (dow === 5) return { title:'Easy o riposo', detail:`5 km a ${fmt(easyPaceSec)}/km, oppure OFF se stanco.`, distance:5, duration:Math.round(5*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'EASY', why:'Recupero attivo' };
+  if (dow === 6) return { title:'Pre-lungo', detail:`4 km a ${fmt(easyPaceSec)}/km + 3 allunghi. Domani lungo.`, distance:4, duration:Math.round(4*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'EASY', why:'Attivazione pre-lungo' };
+
+  // Fallback: easy
+  const easyKm = Math.min(8, Math.max(4, Math.round(remainingKm / 3)));
+  return { title:`Easy ${easyKm}km`, detail:`Corsa facile a ${fmt(easyPaceSec)}/km.`, distance:easyKm, duration:Math.round(easyKm*easyPaceSec/60), pace:fmt(easyPaceSec), intensity:'EASY', why:`Recupero qualità non indicata: TSB ${Math.round(last.tsb)}, settimana ${weekKm.toFixed(0)}/${targetWeeklyKm}km` };
 }
 
 // ─── computePBsFromActivities: estrae i best effort 5K/10K/21K dalle attività ─
@@ -582,12 +797,16 @@ function computePBsFromActivities(activities, fallback) {
       const pm = Math.floor(paceSec / 60);
       const ps = paceSec % 60;
       const date = bestActDate ? new Date(bestActDate).toLocaleDateString('it-IT', { day:'numeric', month:'short', year:'numeric' }) : '—';
+      const daysAgo = bestActDate
+        ? Math.max(1, Math.round((Date.now() - new Date(bestActDate).getTime()) / 86400000))
+        : 30;
       out[t.key] = {
         distance: t.distKm,
         time,
         seconds: bestSec,
         pace: `${pm}:${String(ps).padStart(2,'0')}/km`,
         date,
+        daysAgo,
         fromStrava: true,
       };
     }
@@ -626,6 +845,118 @@ function computeWeeklyAverage(trainingData, weeks = 4) {
   return { avgKm, avgRuns, weeks: buckets.length };
 }
 
+// ─── Run Diary: analisi post-corsa ────────────────────────────────────────────
+// Prende un'attività Strava + (opzionale) laps/streams e restituisce un dict
+// completo con metriche, insights e classificazione del workout.
+function analyzeRun(activity, opts = {}) {
+  if (!activity) return null;
+  const distM = activity.distance || 0;
+  const distKm = distM / 1000;
+  const movTime = activity.moving_time || activity.elapsed_time || 0;
+  const elapsed = activity.elapsed_time || movTime;
+  const avgHr = activity.average_heartrate || null;
+  const maxHr = activity.max_heartrate || null;
+  const elev = activity.total_elevation_gain || 0;
+  const avgPaceSec = movTime && distKm ? movTime / distKm : null;
+  const avgPaceStr = avgPaceSec ? formatPace(avgPaceSec) : '—';
+  const userMaxHr = opts.maxHr || estimateMaxHR(opts.age || 42);
+  const intensity = avgHr ? avgHr / userMaxHr : null;
+  const elevPerKm = distKm > 0 ? elev / distKm : 0;
+  const stoppedTime = elapsed - movTime;
+
+  // Tipo di workout dedotto
+  let inferredType = 'easy';
+  let intensityLabel = 'Facile';
+  if (intensity) {
+    if (intensity >= 0.92) { inferredType = 'vo2'; intensityLabel = 'Soglia/VO2'; }
+    else if (intensity >= 0.85) { inferredType = 'tempo'; intensityLabel = 'Tempo'; }
+    else if (intensity >= 0.78) { inferredType = 'progressivo'; intensityLabel = 'Medio'; }
+    else if (distKm >= 14) { inferredType = 'long'; intensityLabel = 'Lungo lento'; }
+    else { inferredType = 'easy'; intensityLabel = 'Facile'; }
+  } else if (distKm >= 14) { inferredType = 'long'; intensityLabel = 'Lungo'; }
+
+  // Decoupling stimato dai laps (Pa:HR drift sec/half)
+  let decoupling = null;
+  if (opts.laps && opts.laps.length >= 4) {
+    const half = Math.floor(opts.laps.length / 2);
+    const firstHalf = opts.laps.slice(0, half);
+    const secondHalf = opts.laps.slice(half, half * 2);
+    const ef = (laps) => {
+      const totalSec = laps.reduce((s, l) => s + (l.moving_time || 0), 0);
+      const totalDist = laps.reduce((s, l) => s + (l.distance || 0), 0);
+      const avgHrs = laps.filter(l => l.average_heartrate).map(l => l.average_heartrate);
+      const avgHrLap = avgHrs.length ? avgHrs.reduce((a,b)=>a+b,0) / avgHrs.length : null;
+      if (!totalDist || !avgHrLap) return null;
+      const paceSec = totalSec / (totalDist/1000);
+      return { paceSec, hr: avgHrLap, ef: (1000 / paceSec) / avgHrLap };
+    };
+    const a = ef(firstHalf), b = ef(secondHalf);
+    if (a && b) {
+      decoupling = { firstHalfEf: a.ef, secondHalfEf: b.ef, drift: ((a.ef - b.ef) / a.ef) * 100 };
+    }
+  }
+
+  // Lap analysis: detect intervals
+  let lapPattern = null;
+  if (opts.laps && opts.laps.length >= 3) {
+    const paces = opts.laps.map(l => (l.moving_time && l.distance) ? l.moving_time / (l.distance/1000) : null).filter(Boolean);
+    if (paces.length >= 3) {
+      const sorted = [...paces].sort((a,b)=>a-b);
+      const p25 = sorted[Math.floor(sorted.length * 0.25)];
+      const p75 = sorted[Math.floor(sorted.length * 0.75)];
+      const spread = p75 - p25;
+      if (spread > 30) lapPattern = 'intervalli';
+      else if (paces[paces.length-1] < paces[0] - 10) lapPattern = 'progressivo';
+      else lapPattern = 'costante';
+    }
+  }
+
+  // Insights generati
+  const insights = [];
+  if (decoupling) {
+    if (decoupling.drift > 8) insights.push({ tag: 'fatica', text: `Decoupling alto (+${decoupling.drift.toFixed(1)}%) — la FC è salita rispetto al passo nella seconda metà. Segnale di stanchezza aerobica.` });
+    else if (decoupling.drift < 3) insights.push({ tag: 'forma', text: `Decoupling basso (${decoupling.drift.toFixed(1)}%) — sei rimasto efficiente fino in fondo, buon segnale.` });
+  }
+  if (lapPattern === 'progressivo' && inferredType !== 'easy') insights.push({ tag: 'pacing', text: 'Hai chiuso più forte di come hai aperto — pacing intelligente.' });
+  if (lapPattern === 'intervalli') insights.push({ tag: 'workout', text: `Sessione strutturata con intervalli rilevati (${opts.laps.length} lap).` });
+  if (elevPerKm > 30) insights.push({ tag: 'terreno', text: `Salita corposa: ${Math.round(elevPerKm)}m/km. La FC va letta tenendo conto del dislivello.` });
+  if (avgHr && intensity && intensity > 0.88 && distKm > 14) insights.push({ tag: 'attenzione', text: 'Lungo a intensità alta — assicurati di recuperare 36–48h prima del prossimo lavoro intenso.' });
+  if (stoppedTime > 60 && distKm < 8) insights.push({ tag: 'note', text: `${Math.round(stoppedTime/60)} min di pause — semafori, fermate o ricarica?` });
+  if (insights.length === 0) insights.push({ tag: 'ok', text: 'Corsa pulita, niente di anomalo nei numeri.' });
+
+  // Verdetto qualità (0-100)
+  let quality = 70;
+  if (decoupling) quality += decoupling.drift < 5 ? 10 : decoupling.drift > 10 ? -15 : 0;
+  if (lapPattern === 'progressivo') quality += 8;
+  if (inferredType === 'easy' && intensity > 0.82) quality -= 10; // troppo veloce per essere easy
+  quality = Math.max(0, Math.min(100, quality));
+
+  return {
+    id: activity.id,
+    date: activity.start_date_local || activity.start_date,
+    name: activity.name,
+    distKm: parseFloat(distKm.toFixed(2)),
+    movTime, elapsed, stoppedTime,
+    avgPaceSec, avgPaceStr,
+    avgHr, maxHr,
+    elev, elevPerKm: Math.round(elevPerKm),
+    intensity: intensity ? parseFloat(intensity.toFixed(3)) : null,
+    intensityLabel,
+    inferredType,
+    decoupling,
+    lapPattern,
+    insights,
+    quality,
+  };
+}
+
+function formatPace(sec) {
+  if (!sec || !isFinite(sec)) return '—';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2,'0')}/km`;
+}
+
 // Export
 Object.assign(window, {
   estimateMaxHR, getHRZones,
@@ -633,6 +964,8 @@ Object.assign(window, {
   calculateVDOT, predictTimeFromVDOT, predictRaceTime,
   calculateDecoupling, detectOvertraining,
   getFormLabel, generateWorkout, generateTodayWorkout, suggestPlanAdjustment,
+  generateWeekPlan, compareActualVsPlanned, recalibratePlan,
   paceStringToSec, activitiesToTrainingData,
   computePBsFromActivities, computeWeeklyAverage,
+  analyzeRun, formatPace,
 });

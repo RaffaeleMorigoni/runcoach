@@ -56,48 +56,10 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
     [loadHistory, pbsForWorkout, trainingData]
   );
 
-  // ─── Ricalibrazione piano automatica ───────────────────────────────────────
-  // Carica il piano precedente da localStorage, ricalibra, salva il nuovo
-  const recal = useMemoH2(() => {
-    if (loading || activities.length === 0) return null;
-    let lastPlan = null;
-    try {
-      const raw = localStorage.getItem('rc_lastPlan');
-      if (raw) lastPlan = JSON.parse(raw);
-    } catch(e) {}
-    return window.recalibratePlan({
-      activities,
-      loadHistory,
-      raceDateStr: USER.raceDateISO || USER.raceDate,
-      lastPlan,
-    });
-  }, [loadHistory, activities, loading]);
-
-  // Banner dismiss state — persiste su localStorage per timestamp del recalc
-  const recalKey = recal?.timestamp?.slice(0, 10) || '';
-  const [bannerDismissed, setBannerDismissed] = useStateH2(false);
-  useEffectH2(() => {
-    if (!recalKey) return;
-    const dismissed = localStorage.getItem('rc_recalDismissed_' + recalKey);
-    setBannerDismissed(!!dismissed);
-  }, [recalKey]);
-
-  // Salva il piano corrente per confronto al prossimo refresh
-  useEffectH2(() => {
-    if (recal?.plan) {
-      try {
-        localStorage.setItem('rc_lastPlan', JSON.stringify(recal.plan.map(d => ({
-          date: d.date, workout: d.workout
-        }))));
-      } catch(e) {}
-    }
-  }, [recal?.timestamp]);
-
-  const showBanner = recal && recal.changes.length > 0 && !bannerDismissed;
-  const dismissBanner = () => {
-    if (recalKey) localStorage.setItem('rc_recalDismissed_' + recalKey, '1');
-    setBannerDismissed(true);
-  };
+  // ─── Ricalibrazione disabilitata (sarà reintrodotta in futuro) ─────────────
+  const recal = null;
+  const showBanner = false;
+  const dismissBanner = () => {};
 
   // Race countdown — usa raceDateISO (parsabile), fallback su USER.daysToRace
   const daysToRace = useMemoH2(() => {
@@ -171,51 +133,7 @@ function HomeV2({ auth, onNav, tweaks, onLogout }) {
         </div>
       </div>
 
-      {/* Banner ricalibrazione piano */}
-      {showBanner && (
-        <div style={{ padding: '0 14px 12px' }}>
-          <div style={{
-            position: 'relative',
-            borderRadius: 16,
-            padding: '14px 14px 14px 14px',
-            background: recal.severity === 'critical'
-              ? `linear-gradient(135deg, rgba(255,68,34,0.18), rgba(255,68,34,0.06))`
-              : recal.severity === 'warn'
-              ? `linear-gradient(135deg, rgba(255,170,0,0.18), rgba(255,170,0,0.06))`
-              : `linear-gradient(135deg, rgba(0,200,255,0.16), rgba(0,200,255,0.05))`,
-            border: `1px solid ${recal.severity === 'critical' ? '#ff442255' : recal.severity === 'warn' ? '#ffaa0055' : '#00c8ff44'}`,
-            boxShadow: recal.severity === 'critical' ? '0 0 24px rgba(255,68,34,0.25)' : 'none',
-          }}>
-            <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
-              <div style={{
-                width: 32, height: 32, borderRadius: 10,
-                background: recal.severity === 'critical' ? '#ff4422' : recal.severity === 'warn' ? '#ffaa00' : '#00c8ff',
-                display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0,
-                fontSize: 16,
-              }}>{recal.severity === 'critical' ? '⚠' : recal.severity === 'warn' ? '⟳' : '✦'}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: 'white', fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
-                  {recal.summary}
-                </div>
-                {recal.changes.slice(0, 3).map((c, i) => (
-                  <div key={i} style={{ color: NEON.textDim, fontSize: 12, lineHeight: 1.45, marginTop: i === 0 ? 0 : 4 }}>
-                    • {c.reason}
-                  </div>
-                ))}
-                {recal.metrics?.missedCount > 0 && (
-                  <div style={{ marginTop: 8, fontSize: 11, color: NEON.textDim }}>
-                    Settimana scorsa: {recal.metrics.missedCount} sessioni saltate · TSB {Math.round(recal.metrics.tsb)}
-                  </div>
-                )}
-              </div>
-              <button onClick={dismissBanner} style={{
-                background:'transparent', border:'none', color: NEON.textDim,
-                fontSize: 18, cursor:'pointer', padding: 0, lineHeight: 1, flexShrink: 0,
-              }}>×</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Banner ricalibrazione piano — disabilitato */}
 
       {/* HERO Countdown — cinematografico */}
       <div style={{ padding: '0 14px 14px' }}>
