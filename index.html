@@ -138,18 +138,39 @@ setTimeout(function() {
 }, 1500);
 </script>
 
-<script type="text/babel" src="js/shared.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260519b"></script>
-<script type="text/babel" src="js/garmin-read.jsx?v=20260519b"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260519c"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260519c"></script>
+<script>
+// Garmin read helpers (inline — niente file separato)
+(function() {
+  const url = () => (localStorage.getItem('garmin_backend_url') || '').replace(/\/+$/, '');
+  async function get(path) {
+    const u = url(); if (!u) return null;
+    try { const r = await fetch(u + path); if (!r.ok) return null; return await r.json(); } catch { return null; }
+  }
+  window.fetchGarminActivities = async (limit = 20) => (await get('/activities?limit=' + limit))?.activities || [];
+  window.fetchGarminWellnessToday = async () => (await get('/wellness/today'))?.data || null;
+  window.fetchGarminTrainingStatus = async () => (await get('/training-status'))?.data || null;
+  window.mergeActivities = (s = [], g = []) => {
+    const out = [...s];
+    for (const x of g) {
+      const t = new Date(x.start_date).getTime();
+      if (!isFinite(t)) continue;
+      if (!s.find(y => Math.abs(new Date(y.start_date).getTime() - t) < 30*60*1000)) out.push(x);
+    }
+    return out.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+  };
+})();
+</script>
 
 <script type="text/babel">
 const { useState, useEffect } = React;
