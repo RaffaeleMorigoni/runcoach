@@ -117,6 +117,14 @@ window.detectOvertraining = window.detectOvertraining || function() { return { f
 window.getFormLabel = window.getFormLabel || function() { return { label: 'Sconosciuta', color: '#888', desc: 'Dati non disponibili' }; };
 window.predictRaceTime = window.predictRaceTime || function() { return null; };
 window.generateTodayWorkout = window.generateTodayWorkout || function() { return { title: 'Corsa', detail: '', distance: 0, duration: 0, pace: '—', intensity: 'EASY' }; };
+// Token base se shared.jsx non li espone globalmente
+if (typeof window.C === 'undefined') {
+  window.C = { bg:'#06060E', card:'#0D0D1C', card2:'#111126', border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)', orange:'#FF4422', orangeDim:'rgba(255,68,34,0.15)', orangeMid:'rgba(255,68,34,0.25)', teal:'#00CFA8', tealDim:'rgba(0,207,168,0.14)', blue:'#4D9EFF', blueDim:'rgba(77,158,255,0.14)', purple:'#A78BFA', purpleDim:'rgba(167,139,250,0.14)', yellow:'#F6C94E', text:'#EEEEF8', sub:'rgba(238,238,248,0.55)', faint:'rgba(238,238,248,0.25)', ghost:'rgba(238,238,248,0.1)' };
+}
+if (typeof window.USER === 'undefined') {
+  window.USER = { name:'Runner', age:42, raceName:'Mezza Maratona', raceDate:'2026-05-03', raceDateISO:'2026-05-03', raceTargetTime:'1:58:00', raceTargetPace:'5:35/km', daysToRace:0, currentWeek:1, weeksTotal:12, weeklyKm:25, longestRun:18, garminDevice:'Forerunner', currentEasyPace:'6:00/km', level:'Intermedio' };
+}
+window.TODAY_WORKOUT = window.TODAY_WORKOUT || { id:'fb', title:'Corsa', type:'easy', distance:5, duration:30, targetPace:'6:00/km', subtitle:'' };
 // Componenti grafici nuovi — fallback se manca
 window.__FALLBACK_BOX__ = function(props) {
   return React.createElement('div', { style: { padding: 16, background: 'rgba(255,255,255,0.04)', borderRadius: 12, color: '#888', fontSize: 12, textAlign: 'center' }}, '— componente non disponibile —');
@@ -138,17 +146,17 @@ setTimeout(function() {
 }, 1500);
 </script>
 
-<script type="text/babel" src="js/shared.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/design-system.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/chart-components.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/coach-engine.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/strava.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/home-mobile.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/home-v2.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/progress-v2.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/screens-mobile.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/strava-screens.jsx?v=20260519d"></script>
-<script type="text/babel" src="js/garmin-workout.jsx?v=20260519d"></script>
+<script type="text/babel" src="js/shared.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/design-system.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/chart-components.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/coach-engine.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/strava.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/home-mobile.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/home-v2.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/progress-v2.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/screens-mobile.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/strava-screens.jsx?v=20260519e"></script>
+<script type="text/babel" src="js/garmin-workout.jsx?v=20260519e"></script>
 <script>
 // Garmin read helpers (inline — niente file separato)
 (function() {
